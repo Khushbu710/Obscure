@@ -86,4 +86,29 @@ describe("prompt -> authorization -> payment -> simulated delivery (HTTP)", () =
     const app = await buildServer(createTestDb(), { guardianHmacSecret: "s" });
     expect((await app.inject({ method: "GET", url: "/api/orders/99999999-9999-4999-8999-999999999999" })).statusCode).toBe(404);
   });
+
+  it("GET /api/orders lists order history (newest first, no nonce), optionally filtered by mandate", async () => {
+    const app = await buildServer(createTestDb(), {
+      guardianHmacSecret: "s",
+      agentDriver: new FakeLlmDriver([toolUseStep("t1", "propose_purchase", { merchantProductId: "bitrefill-esim-japan::5GB, 30 Days" })]),
+      bitrefillClient: new BitrefillClient({ apiKey: "k", fetchImpl: fixtureFetch }),
+      invoiceCreator: { createInvoiceForOrder: async () => ({ id: "inv-list" }) },
+      signerGateway: new FakeSigner(),
+      intentBuilder: new TransactionIntentBuilder({ destinationAddress: "utest1settlement", zatoshiPerMinor: 10_000 }),
+    });
+    const mk = async () =>
+      JSON.parse((await app.inject({ method: "POST", url: "/api/mandates", payload: { allowedCategories: ["esim"], totalCapMinor: 3000, currency: "USD", durationHours: 24 } })).payload);
+    const m1 = await mk();
+    const m2 = await mk();
+    await app.inject({ method: "POST", url: "/api/shopping/requests", payload: { mandateId: m1.id, prompt: "x" } });
+    await app.payments!.idle();
+
+    const all = JSON.parse((await app.inject({ method: "GET", url: "/api/orders" })).payload);
+    expect(all.orders).toHaveLength(1);
+    expect(all.orders[0].payment).toMatchObject({ txId: "tx-e2e", settlementMode: "simulated" });
+    expect(JSON.stringify(all)).not.toContain("nonce");
+
+    expect(JSON.parse((await app.inject({ method: "GET", url: `/api/orders?mandateId=${m1.id}` })).payload).orders).toHaveLength(1);
+    expect(JSON.parse((await app.inject({ method: "GET", url: `/api/orders?mandateId=${m2.id}` })).payload).orders).toHaveLength(0);
+  });
 });

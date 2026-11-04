@@ -56,6 +56,12 @@ export class OrderRepository {
     this.db.prepare("UPDATE orders SET status = ? WHERE order_id = ?").run(status, orderId);
   }
 
+  /** Additive (2026-11-04, order listing): every order, newest first. */
+  listAll(): Order[] {
+    const rows = this.db.prepare("SELECT * FROM orders ORDER BY proposed_at DESC").all() as unknown as OrderRow[];
+    return rows.map(rowToOrder);
+  }
+
   listByMandate(mandateId: string): Order[] {
     const rows = this.db
       .prepare("SELECT * FROM orders WHERE mandate_id = ? ORDER BY proposed_at DESC")
