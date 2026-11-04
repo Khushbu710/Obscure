@@ -50,5 +50,16 @@ CREATE TABLE IF NOT EXISTS payment_intents (
   status              TEXT NOT NULL,
   merchant_invoice_ref TEXT,
   amount_zatoshi      INTEGER,
+  tx_id               TEXT,
   settlement_mode     TEXT NOT NULL DEFAULT 'simulated' CHECK (settlement_mode IN ('real', 'simulated'))
+);
+
+-- One signed hash-commitment receipt per delivered order. UNIQUE(order_id) is the idempotency backstop.
+CREATE TABLE IF NOT EXISTS receipts (
+  receipt_id        TEXT PRIMARY KEY,
+  order_id          TEXT NOT NULL UNIQUE REFERENCES orders(order_id),
+  commitment        TEXT NOT NULL,
+  signature         TEXT NOT NULL,
+  encrypted_payload TEXT NOT NULL,
+  created_at        TEXT NOT NULL
 );

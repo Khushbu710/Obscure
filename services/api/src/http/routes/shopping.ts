@@ -6,6 +6,7 @@ import { AgentOrchestrator, type AgentRunOutcome } from "../../agent/orchestrato
 import type { AgentLlmDriver } from "../../agent/types.js";
 import type { ProductDiscoveryService } from "../../bitrefill/productDiscoveryService.js";
 import type { OrderAuthorizationService } from "../../mandate/orderAuthorizationService.js";
+import type { PaymentService } from "../../payment/paymentService.js";
 import { sendError } from "../errors.js";
 
 export interface ShoppingAgentDependencies {
@@ -61,6 +62,8 @@ export function registerShoppingRoutes(
   /** null when ANTHROPIC_API_KEY/BITREFILL_API_KEY/GUARDIAN_HMAC_SECRET are not configured - the route still exists, it just reports its own unconfigured state rather than the server failing to boot. */
   agentDeps: ShoppingAgentDependencies | null,
   routeOptions: ShoppingRouteOptions = {},
+  /** null when payments are not configured: authorized orders then stay `reserved`. */
+  payments: PaymentService | null = null,
 ): void {
   app.post("/api/shopping/requests", async (request, reply) => {
     const parsed = CreateShoppingRequestSchema.safeParse(request.body);
@@ -108,6 +111,10 @@ export function registerShoppingRoutes(
       sendError(reply, err);
       return;
     }
+
+    // Kick off payment in the background, using the guardian's token while it is still valid
+    // (90s). The token never leaves the backend; the response below is sanitized as before.
+    if (outcome.kind === "authorized") payments?.start(outcome.order, outcome.guardian.authorizationToken);
 
     reply.code(200).send(toShoppingResponse(outcome));
   });
