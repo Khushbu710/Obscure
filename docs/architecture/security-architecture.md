@@ -51,7 +51,7 @@ The signer is the last line of defense. If the guardian is buggy, bypassed, or i
 
 ## 4. Concurrency and overspend prevention
 
-Chosen for hackathon scope: **SQLite with a single writer connection** (via `better-sqlite3`, which is synchronous and serializes all writes on one connection by construction). Every guardian approval + budget deduction happens inside one SQLite transaction:
+Chosen for hackathon scope: **SQLite with a single writer connection** (via Node's built-in `node:sqlite` module's synchronous `DatabaseSync`, which serializes all writes on one connection by construction). Every guardian approval + budget deduction happens inside one SQLite transaction:
 
 ```
 BEGIN;
