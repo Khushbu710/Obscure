@@ -74,3 +74,47 @@ Unchanged in principle: a fresh receiving address is used for each outbound paym
 ## 7. What this buys privacy-wise, stated honestly
 
 Unchanged from the prior revision: shielded at rest in the Ironwood pool; not hidden from the swap/settlement step (now moot for the MVP, see `demo-scope.md` — testnet TAZ cannot be swapped to anything of value anyway); not hidden from Bitrefill; explicitly no protection against a compromised user device.
+
+
+## 8. Live PoC results (2026-11-04, measured — not research)
+
+This section is the "live PoC" the roadmap required. Everything below was run against the live Zcash testnet (`testnet.zec.rocks:443`, chain tip ≈ 4,582,000, NU7/Ironwood active) with `zcash-devtool` built from `zcash/zcash-devtool` at commit `0b3436bb`. Re-run: `scripts/checkpoint-a.ts` (script) and `scripts/live-http-run.ts` (over HTTP with a separate signer process).
+
+**Verdict: the Zcash leg is real.** `zcash-devtool` can be driven from Node (create wallet, address, balance, send, confirmation status, sweep) and produces Ironwood-pool transactions that the testnet accepts and confirms.
+
+### Faucets (what actually worked)
+
+| Faucet | Result |
+|---|---|
+| `faucet.testnet.valargroup.dev` | **Failed.** `/api/status` said `ready: true`, but every claim failed with "the wallet cannot pay this address" — reproduced through its own API, even for a plain transparent address. |
+| `zcashfaucet.jinolabs.xyz` | **Down.** Its own status showed 0 drips in 30 days, the miner inactive for ~27 days, the node ~8,600 blocks behind. A request showed "in line" and never paid. |
+| `faucet.zecpages.com` | Unreachable. |
+| **`fauzec.com`** | **Worked.** 1 TAZ to a Unified Address (Orchard+Sapling receivers), received as **Ironwood**, tx `a58b9ce6…2660`, block 4,582,318. Needs a browser Cloudflare check; 1 TAZ per address per 24 h. Does not accept plain transparent addresses. |
+
+### Verified transactions
+
+| Step | txid | Block | Notes |
+|---|---|---|---|
+| Faucet → main wallet | `a58b9ce674f7f4212432f6a95fefe891b0c35f88d7ccd55863a098c449812660` | 4,582,318 | 1.00000000 TAZ, Ironwood |
+| Main → envelope (funding) | `3edb8a5f2efad42b85e7d1bb9b4ee1af9bb0083954a121985911f0a71ffb4dfa` | 4,582,329 | 0.30 TAZ, Ironwood → Ironwood, fee 0.00025 TAZ |
+| Checkpoint A (1st, pre-merge signer) | `f786a9a624fbc6f48b5c649fb4221cf60d83e4c1383232b296e9774295f3958c` | 4,582,465 | guardian-approved order, signer-paid 0.05 TAZ from the envelope, fee 0.00015 |
+| Checkpoint A (reconciled signer) | `929488e9184326444a210c67eb5f524bacbdf39962480612075427886c4e9b1f` | 4,582,521 | status progressed broadcast → mined → confirmed |
+| Live HTTP run: funding | `1865a9ba6c5ebcbb9cd0b2a7891c636f395e414d3cd5bbdb532fb2aa550af9b2` | 4,582,576 | the signer process created the envelope wallet over HTTP |
+| Live HTTP run: order payment | `ef297b23aa6fdfe407820eac4b4175fcdd90e2d6d39f082311043916d06b8b50` | 4,582,587 | 0.05 TAZ (500 cents × 10,000 zatoshi/cent), delivered (simulated settlement) |
+| Live HTTP run: sweep-back | `d9fcf1c89caceb37740f3adddaba7ca775cf52ff502a6f9e08101081cb4274bc` | 4,582,591 | 0.0498 TAZ back to the user's main wallet |
+
+Every payment above was confirmed from the **receiving** wallet's own `list-tx`, not only from the sender's log.
+
+### Measured behaviour to design around
+
+- **Spendability lags receipt.** A received note shows in `total` after about one block but is `spendable` only after ~10 confirmations (≈ 4–5 minutes on this testnet). The UI must show both and must not treat `spendable = 0` as unfunded.
+- **Fees (ZIP-317):** 0.00015 TAZ for a simple 1-recipient send; 0.00025 TAZ when the wallet splits change into 4 notes (the default note management).
+- **Transaction version:** `wallet send` chose the version itself and the network accepted it. Its help text says `--tx-version` takes 4 or 5; this earlier doc claimed 6. **We did not independently inspect the version field** — only that the testnet accepted and confirmed the transactions.
+- **Output format:** `wallet send` prints the txid as its final line; `wallet list-tx` prints `Mined: <height>` once mined; `wallet balance --json` and `wallet get-info` emit single-line JSON. Parsers in `packages/zcash-adapter/src/cliAdapter.ts` are tested against verbatim captured output.
+- **A hang was observed once:** the first run of `wallet init` for a new wallet from a Node subprocess hung until killed; the same command worked in seconds from a shell. The cause was not confirmed. Mitigation (not proof of cause): the adapter's runner now closes the child's stdin and applies a per-command timeout.
+- **Per-command latency:** each CLI call (sync, balance) takes seconds, not milliseconds. Confirmation tracking therefore polls; it does not subscribe.
+
+### What this does and does not show
+
+- Shows: Ironwood wallets, funding, signed payments from an isolated per-mandate envelope wallet, confirmation tracking, and sweep-back all work on the live testnet through the real signer and adapter.
+- Does not show: any real Bitrefill purchase (testnet TAZ cannot pay one — see `demo-scope.md`), live Anthropic/Bitrefill calls (no keys were available; the live run used a scripted agent and a fixture product), or that the signer is isolated from a compromised backend with write access to the shared SQLite file (`security-architecture.md` §3).
