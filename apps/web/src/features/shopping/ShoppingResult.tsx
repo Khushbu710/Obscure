@@ -60,8 +60,8 @@ export function ShoppingResult({ result }: { result: ShoppingRequestResponse }) 
           <p>
             <b>Authorization is not payment.</b>
             <br />
-            No Zcash transaction has been signed or broadcast. The isolated signer and Zcash adapter integration are not connected yet
-            (see the Wallet page) - this order is reserved against your mandate's budget, nothing more.
+            Guardian approval only reserves this amount against your mandate's budget. If a signer and Zcash adapter are configured on
+            this backend, a payment attempt starts in the background now - track its live status on the Activity page rather than here.
           </p>
         </div>
       </aside>

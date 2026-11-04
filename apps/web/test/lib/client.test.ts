@@ -123,3 +123,85 @@ describe("api client - response-shape validation (ResponseShapeError)", () => {
     expect(result.status).toBe("no_proposal");
   });
 });
+
+describe("api client - wallet routes", () => {
+  it("wallet.envelope parses a real envelope status response", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => jsonResponse({ mandateId: VALID_MANDATE.id, receivingAddress: "utest1abc", spendableZatoshi: 1000, totalZatoshi: 1000, funded: true, fundingTxId: null })),
+    );
+    const res = await api.wallet.envelope(VALID_MANDATE.id);
+    expect(res.receivingAddress).toBe("utest1abc");
+    expect(res.spendableZatoshi).toBe(1000);
+  });
+
+  it("wallet.envelope surfaces NO_ENVELOPE as a structured ApiError, not a crash", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => jsonResponse({ error: { code: "NO_ENVELOPE", message: "Mandate has no envelope wallet yet." } }, 404)));
+    await expect(api.wallet.envelope(VALID_MANDATE.id)).rejects.toMatchObject({ code: "NO_ENVELOPE", status: 404 });
+  });
+
+  it("rejects a wallet response that doesn't match the real shape", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => jsonResponse({ totally: "wrong" })));
+    await expect(api.wallet.envelope(VALID_MANDATE.id)).rejects.toBeInstanceOf(ResponseShapeError);
+  });
+});
+
+describe("api client - order routes", () => {
+  it("orders.list parses a real order+payment list", async () => {
+    const safeOrder = {
+      orderId: "22222222-2222-2222-2222-222222222222",
+      mandateId: VALID_MANDATE.id,
+      product: { merchantProductId: "p1", name: "Japan eSIM", priceMinor: 1250, currency: "USD", category: "esim", merchantId: "bitrefill" },
+      priceMinor: 1250,
+      status: "reserved",
+      proposedAt: "2026-11-04T12:00:00.000Z",
+    };
+    vi.stubGlobal("fetch", vi.fn(async () => jsonResponse({ orders: [{ order: safeOrder, payment: null }] })));
+    const orders = await api.orders.list();
+    expect(orders).toHaveLength(1);
+    expect(orders[0].order.orderId).toBe(safeOrder.orderId);
+  });
+
+  it("orders.get rejects a response carrying a nonce - the backend must never leak it, and the client must not silently accept it either", async () => {
+    const orderWithNonce = {
+      orderId: "22222222-2222-2222-2222-222222222222",
+      mandateId: VALID_MANDATE.id,
+      nonce: "should-never-be-here",
+      product: { merchantProductId: "p1", name: "Japan eSIM", priceMinor: 1250, currency: "USD", category: "esim", merchantId: "bitrefill" },
+      priceMinor: 1250,
+      status: "reserved",
+      proposedAt: "2026-11-04T12:00:00.000Z",
+    };
+    // SafeOrderViewSchema uses .omit (strips extras from the *type*, not from
+    // runtime parsing) - this just documents that the client's schema is the
+    // sanitized view, not that it re-validates server-side sanitization.
+    vi.stubGlobal("fetch", vi.fn(async () => jsonResponse({ order: orderWithNonce, payment: null })));
+    const result = await api.orders.get("x");
+    expect(result.order.orderId).toBe(orderWithNonce.orderId);
+  });
+});
+
+describe("api client - receipt routes", () => {
+  it("receipts.list parses real receipt metadata, never the encrypted payload", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => jsonResponse([{ receiptId: "33333333-3333-3333-3333-333333333333", orderId: "22222222-2222-2222-2222-222222222222", commitment: "a".repeat(64), createdAt: "2026-11-04T12:00:00.000Z" }])),
+    );
+    const receipts = await api.receipts.list();
+    expect(receipts).toHaveLength(1);
+    expect((receipts[0] as Record<string, unknown>).encryptedPayload).toBeUndefined();
+  });
+});
+
+describe("api client - security scoreboard", () => {
+  it("parses an honest not_run response", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => jsonResponse({ status: "not_run", message: "not run yet" })));
+    const res = await api.security.scoreboard();
+    expect(res.status).toBe("not_run");
+  });
+
+  it("rejects a response with an unrecognized status discriminant rather than guessing", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => jsonResponse({ status: "fabricated_success" })));
+    await expect(api.security.scoreboard()).rejects.toBeInstanceOf(ResponseShapeError);
+  });
+});

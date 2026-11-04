@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatMinor, formatMinorCompact } from "../../src/lib/formatters/money";
+import { formatMinor, formatMinorCompact, formatZatoshi } from "../../src/lib/formatters/money";
 
 describe("formatMinor - integer minor-unit formatting", () => {
   it("formats cents as currency correctly", () => {
@@ -34,5 +34,18 @@ describe("formatMinorCompact", () => {
 
   it("never renders 'NaN' for a non-finite amount", () => {
     expect(formatMinorCompact(NaN)).toBe("—");
+  });
+});
+
+describe("formatZatoshi - a fixed unit conversion (1 ZEC = 100,000,000 zatoshi), not an exchange rate", () => {
+  it("converts zatoshi to ZEC with 8 decimal places", () => {
+    expect(formatZatoshi(5_000_000)).toBe("0.05000000 ZEC");
+    expect(formatZatoshi(100_000_000)).toBe("1.00000000 ZEC");
+    expect(formatZatoshi(0)).toBe("0.00000000 ZEC");
+  });
+
+  it("shows a placeholder, never a fabricated amount, when there is nothing to show", () => {
+    expect(formatZatoshi(null)).toBe("—");
+    expect(formatZatoshi(NaN)).toBe("—");
   });
 });

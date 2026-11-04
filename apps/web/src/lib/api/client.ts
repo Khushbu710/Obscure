@@ -1,12 +1,33 @@
 import { z } from "zod";
 import {
   MandateSchema,
+  SelectiveDisclosureSchema,
   ShoppingRequestResponseSchema,
   type CreateMandateRequest,
   type CreateShoppingRequest,
   type Mandate,
+  type SelectiveDisclosure,
   type ShoppingRequestResponse,
 } from "@obscura/contracts";
+import {
+  OrderWithPaymentSchema,
+  OrdersListResponseSchema,
+  ReceiptDetailResponseSchema,
+  ReceiptListResponseSchema,
+  ReceiptPublicKeyResponseSchema,
+  ScoreboardResponseSchema,
+  WalletEnvelopeResponseSchema,
+  WalletFundResponseSchema,
+  WalletSweepResponseSchema,
+  type OrderWithPayment,
+  type ReceiptDetailResponse,
+  type ReceiptMetadata,
+  type ReceiptPublicKeyResponse,
+  type ScoreboardResponse,
+  type WalletEnvelopeResponse,
+  type WalletFundResponse,
+  type WalletSweepResponse,
+} from "./schemas";
 
 const DEFAULT_TIMEOUT_MS = 20_000;
 
@@ -134,5 +155,60 @@ export const api = {
         "POST /api/shopping/requests",
         await request("/api/shopping/requests", { method: "POST", body: JSON.stringify(body) }),
       ),
+  },
+  wallet: {
+    /** 404 NO_ENVELOPE/MANDATE_NOT_FOUND, 409 MANDATE_NOT_ACTIVE, 503 SIGNER_NOT_CONFIGURED, 502 SIGNER_UNAVAILABLE surface as ApiError - the caller decides which of these mean "not funded yet" vs. a real failure. */
+    fund: async (mandateId: string): Promise<WalletFundResponse> =>
+      parseOrThrow(
+        WalletFundResponseSchema,
+        "POST /api/mandates/:id/fund",
+        await request(`/api/mandates/${encodeURIComponent(mandateId)}/fund`, { method: "POST" }),
+      ),
+    envelope: async (mandateId: string): Promise<WalletEnvelopeResponse> =>
+      parseOrThrow(
+        WalletEnvelopeResponseSchema,
+        "GET /api/mandates/:id/envelope",
+        await request(`/api/mandates/${encodeURIComponent(mandateId)}/envelope`),
+      ),
+    /** 409 MANDATE_STILL_ACTIVE / ORDERS_IN_FLIGHT / NOTHING_TO_SWEEP, 404 NO_ENVELOPE. */
+    sweep: async (mandateId: string): Promise<WalletSweepResponse> =>
+      parseOrThrow(
+        WalletSweepResponseSchema,
+        "POST /api/mandates/:id/sweep",
+        await request(`/api/mandates/${encodeURIComponent(mandateId)}/sweep`, { method: "POST" }),
+      ),
+  },
+  orders: {
+    /** A read of stored state only - does not poll the chain. */
+    list: async (mandateId?: string): Promise<OrderWithPayment[]> => {
+      const parsed = parseOrThrow(
+        OrdersListResponseSchema,
+        "GET /api/orders",
+        await request(mandateId ? `/api/orders?mandateId=${encodeURIComponent(mandateId)}` : "/api/orders"),
+      );
+      return parsed.orders;
+    },
+    /** Also advances the payment by one chain observation server-side - safe and intended to be polled. */
+    get: async (orderId: string): Promise<OrderWithPayment> =>
+      parseOrThrow(OrderWithPaymentSchema, "GET /api/orders/:id", await request(`/api/orders/${encodeURIComponent(orderId)}`)),
+  },
+  receipts: {
+    list: async (): Promise<ReceiptMetadata[]> =>
+      parseOrThrow(ReceiptListResponseSchema, "GET /api/receipts", await request("/api/receipts")),
+    get: async (receiptId: string): Promise<ReceiptDetailResponse> =>
+      parseOrThrow(ReceiptDetailResponseSchema, "GET /api/receipts/:id", await request(`/api/receipts/${encodeURIComponent(receiptId)}`)),
+    disclose: async (receiptId: string): Promise<SelectiveDisclosure> =>
+      parseOrThrow(
+        SelectiveDisclosureSchema,
+        "POST /api/receipts/:id/disclose",
+        await request(`/api/receipts/${encodeURIComponent(receiptId)}/disclose`, { method: "POST" }),
+      ),
+    publicKey: async (): Promise<ReceiptPublicKeyResponse> =>
+      parseOrThrow(ReceiptPublicKeyResponseSchema, "GET /api/receipts/public-key", await request("/api/receipts/public-key")),
+  },
+  security: {
+    /** Never fabricates a result - returns the real { status: "not_run" } or { status: "ok", run } the backend serves. */
+    scoreboard: async (): Promise<ScoreboardResponse> =>
+      parseOrThrow(ScoreboardResponseSchema, "GET /api/security/scoreboard", await request("/api/security/scoreboard")),
   },
 };

@@ -1,3 +1,4 @@
+import { Link } from "react-router-dom";
 import type { Mandate } from "@obscura/contracts";
 import { Status } from "../../components/common/Status";
 import { Icon } from "../../components/common/Icon";
@@ -86,6 +87,9 @@ export function MandateDocument({
       <div className="mandate-actions">
         <span className="mono">{mandate.id.slice(0, 8).toUpperCase()}</span>
         <div>
+          <Link to={`/wallet?mandateId=${mandate.id}`} className="secondary">
+            <Icon name="wallet" size={14} /> Wallet
+          </Link>
           {mandate.status === "active" && (
             <button className="secondary" disabled={busy} onClick={() => onPause(mandate.id)}>
               <Icon name="pause" size={15} /> Pause

@@ -2,18 +2,15 @@ import { useState } from "react";
 import { PageHead } from "../../components/common/PageHead";
 import { Icon, type IconName } from "../../components/common/Icon";
 import { Status } from "../../components/common/Status";
+import { LoadingState } from "../../components/feedback/LoadingState";
+import { ErrorState } from "../../components/feedback/ErrorState";
 import { useBackendHealth } from "../../hooks/useBackendHealth";
-import { ATTACK_SCENARIOS, type ScoreboardStatus } from "./attackScenarios";
-
-const statusTone: Record<ScoreboardStatus, "green" | "red" | "amber" | "gray"> = {
-  Passed: "green",
-  Failed: "red",
-  "Not Run": "amber",
-  Unavailable: "gray",
-};
+import { useAsync } from "../../hooks/useAsync";
+import { api } from "../../lib/api/client";
 
 export function SecurityPage() {
   const health = useBackendHealth();
+  const scoreboardState = useAsync(() => api.security.scoreboard(), []);
   const [expanded, setExpanded] = useState<string | null>(null);
 
   return (
@@ -28,7 +25,7 @@ export function SecurityPage() {
         <div>
           <p className="eyebrow">Current posture</p>
           <h2>Backend {health === "connected" ? "is reachable" : health === "unreachable" ? "is unreachable" : "status checking"}.</h2>
-          <p>This reflects only a live GET /health check - it is not a claim that the signer has independently passed verification (no signer exists yet).</p>
+          <p>This reflects a live GET /health check. The attack scoreboard below is a separate, real scoreboard served from the last actual test run.</p>
         </div>
         <Status tone={health === "connected" ? "green" : health === "unreachable" ? "red" : "amber"}>
           {health === "connected" ? "Connected" : health === "unreachable" ? "Unreachable" : "Checking"}
@@ -40,8 +37,8 @@ export function SecurityPage() {
           [
             ["01", "search", "Shopping agent", "Discovers products and prepares proposals.", "Cannot access keys or move funds."],
             ["02", "shield", "Policy guardian", "Deterministically checks every mandate rule.", "Cannot be bypassed by agent output."],
-            ["03", "lock", "Isolated signer", "Would re-validate authorization before signing.", "Not yet implemented - no live transactions occur."],
-            ["04", "wallet", "Zcash network", "Would broadcast and confirm the shielded transaction.", "Not yet connected - see Wallet page."],
+            ["03", "lock", "Isolated signer", "Independently re-validates authorization before signing.", "A separate process; HMAC-authenticated HTTP from the backend."],
+            ["04", "wallet", "Zcash network", "Broadcasts and confirms the shielded transaction.", "Real testnet transactions via zcash-devtool - see the Wallet page."],
           ] satisfies [string, IconName, string, string, string][]
         ).map(([num, icon, title, desc, note], i) => (
           <article key={title}>
@@ -61,42 +58,69 @@ export function SecurityPage() {
             <p className="eyebrow">Adversarial test coverage</p>
             <h2>Attack scoreboard</h2>
           </div>
+          {scoreboardState.status === "success" && (
+            <button className="icon-button" aria-label="Refresh scoreboard" onClick={() => scoreboardState.reload()}>
+              <Icon name="pulse" />
+            </button>
+          )}
         </div>
-        <p className="page-intro" style={{ marginTop: 4 }}>
-          These scenarios are implemented as real backend tests (see docs/architecture/testing-strategy.md) but there is no{" "}
-          <code>/api/security/scoreboard</code> endpoint to query live results from this UI yet - every status below is honestly{" "}
-          <b>Unavailable</b>, never a hardcoded pass.
-        </p>
-        <div className="scoreboard-table">
-          <div className="scoreboard-row table-head">
-            <span>Scenario</span>
-            <span>Expected result</span>
-            <span>Actual result</span>
-            <span>Status</span>
+
+        {scoreboardState.status === "loading" && <LoadingState label="Loading scoreboard…" />}
+        {scoreboardState.status === "error" && <ErrorState error={scoreboardState.error} onRetry={scoreboardState.reload} />}
+
+        {scoreboardState.status === "success" && scoreboardState.data.status === "not_run" && (
+          <div className="info-box" style={{ background: "var(--amber-soft)", color: "var(--amber)", marginTop: 14 }}>
+            <Icon name="alert" />
+            <p>{scoreboardState.data.message}</p>
           </div>
-          {ATTACK_SCENARIOS.map((s) => (
-            <div key={s.name}>
-              <button
-                className="scoreboard-row"
-                style={{ width: "100%", textAlign: "left", border: 0, borderBottom: "1px solid var(--line)", cursor: "pointer" }}
-                onClick={() => setExpanded(expanded === s.name ? null : s.name)}
-              >
-                <span>
-                  <b>{s.name}</b>
-                  <small>{s.description}</small>
-                </span>
-                <span>{s.expected}</span>
-                <span className="mono">{s.actual}</span>
-                <span>
-                  <Status tone={statusTone[s.actual]}>{s.actual}</Status>
-                </span>
-              </button>
-              {expanded === s.name && (
-                <div style={{ padding: "12px 10px 18px", fontSize: 10, color: "var(--muted)", background: "#fafaf7" }}>{s.details}</div>
-              )}
-            </div>
-          ))}
-        </div>
+        )}
+
+        {scoreboardState.status === "success" && scoreboardState.data.status === "ok" && (() => {
+          const run = scoreboardState.data.run;
+          return (
+            <>
+              <p className="page-intro" style={{ marginTop: 4 }}>
+                Last run {new Date(run.ranAt).toLocaleString()}: <b>{run.passed}/{run.total}</b> passed ({run.corePassed}/{run.coreTotal}{" "}
+                core scenarios). This is the real, stored result of the last <code>npm run scoreboard</code> execution against the
+                actual implementation - never a hardcoded pass.
+              </p>
+              <div className="scoreboard-table">
+                <div className="scoreboard-row table-head">
+                  <span>Scenario</span>
+                  <span>Attack</span>
+                  <span>Observed</span>
+                  <span>Status</span>
+                </div>
+                {run.results.map((r) => (
+                  <div key={r.id}>
+                    <button
+                      className="scoreboard-row"
+                      style={{ width: "100%", textAlign: "left", border: 0, borderBottom: "1px solid var(--line)", cursor: "pointer" }}
+                      onClick={() => setExpanded(expanded === r.id ? null : r.id)}
+                    >
+                      <span>
+                        <b>
+                          {r.id} {r.title}
+                        </b>
+                        <small>{r.expectedDefense}</small>
+                      </span>
+                      <span>{r.attack}</span>
+                      <span className="mono">{r.observed}</span>
+                      <span>
+                        <Status tone={r.passed ? "green" : "red"}>{r.passed ? "Passed" : "Failed"}</Status>
+                      </span>
+                    </button>
+                    {expanded === r.id && (
+                      <div style={{ padding: "12px 10px 18px", fontSize: 10, color: "var(--muted)", background: "#fafaf7" }}>
+                        {r.core ? "Core scenario. " : ""}Duration {r.durationMs}ms.
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </>
+          );
+        })()}
       </section>
     </>
   );
