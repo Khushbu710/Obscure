@@ -5,6 +5,7 @@ build/
 .next/
 coverage/
 target/
+*.tsbuildinfo
 
 # Environment / secrets
 .env
