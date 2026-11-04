@@ -1,7 +1,41 @@
+# Dependencies / build artifacts
 node_modules/
 dist/
 build/
+.next/
+coverage/
+target/
+
+# Environment / secrets
 .env
 .env.*
+!.env.example
+
+# Logs
 *.log
+
+# Wallet / key material — never commit real or test key material
+*.seed
+*seed-phrase*
+*mnemonic*
+*.key
+*.pem
+*wallet.dat
+*wallet-db*
+zcash-devtool-wallets/
+
+# Local databases
+*.sqlite
+*.sqlite3
+*.db
+*.db-wal
+*.db-shm
+*.sqlite-wal
+*.sqlite-shm
+
+# OS / editor
 .DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
