@@ -1,0 +1,20 @@
+{
+  "name": "obscura",
+  "private": true,
+  "workspaces": [
+    "packages/*",
+    "services/*",
+    "apps/*"
+  ],
+  "scripts": {
+    "build:contracts": "npm run build -w @obscura/contracts",
+    "build:guardian": "npm run build -w @obscura/guardian",
+    "build:bitrefill-client": "npm run build -w @obscura/bitrefill-client",
+    "pretest": "npm run build:contracts && npm run build:guardian && npm run build:bitrefill-client",
+    "test": "npm run test --workspaces --if-present",
+    "build": "npm run build --workspaces --if-present"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}
