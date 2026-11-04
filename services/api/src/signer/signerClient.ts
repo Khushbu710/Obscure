@@ -28,8 +28,9 @@ export interface TxView {
   confirmations?: number;
 }
 
+/** The signer's answer to /sign. `txId` is the transaction the wallet actually broadcast (additive contract field). */
 export type SignOutcome =
-  | { signed: true; walletRef: string; amountZatoshi: number; signedAt: string; tx: TxView }
+  | { signed: true; txProposal: { walletRef: string; outputs: Array<{ address: string; amountZatoshi: number }>; memo: string | null }; signedAt: string; txId?: string }
   | { signed: false; code: string; reason: string };
 
 /**
@@ -41,7 +42,7 @@ export interface SignerGateway {
   envelopeStatus(mandateId: string): Promise<WalletOpResult<EnvelopeStatus>>;
   sweep(mandateId: string): Promise<WalletOpResult<SweepResult>>;
   /** Asks the signer to independently re-validate and pay one authorized order. */
-  sign(request: { authorizationToken: string; order: unknown }): Promise<SignOutcome>;
+  sign(request: { authorizationToken: string; order: unknown; destinationAddress: string; amountZatoshi: number }): Promise<SignOutcome>;
   /** Read-only confirmation lookup for a signed order's transaction. */
   txStatus(orderId: string, txId: string): Promise<WalletOpResult<{ tx: TxView }>>;
 }
@@ -85,7 +86,7 @@ export class HttpSignerClient implements SignerGateway {
     return json as T;
   }
 
-  sign(request: { authorizationToken: string; order: unknown }) {
+  sign(request: { authorizationToken: string; order: unknown; destinationAddress: string; amountZatoshi: number }) {
     return this.post<SignOutcome>("/sign", request);
   }
   txStatus(orderId: string, txId: string) {

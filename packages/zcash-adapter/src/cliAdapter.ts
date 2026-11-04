@@ -17,6 +17,8 @@ export interface CliAdapterOptions {
   network?: "test" | "main";
   /** Blocks (including the mining block) before a transaction counts as `confirmed`. Default 3. */
   confirmationsRequired?: number;
+  /** Per-command timeout for the default runner (ms). Default 120000. */
+  commandTimeoutMs?: number;
   /** Injection point for tests. */
   runner?: CommandRunner;
 }
@@ -40,7 +42,15 @@ export class CliZcashAdapter implements ZcashAdapter {
   private readonly confirmationsRequired: number;
 
   constructor(private readonly opts: CliAdapterOptions) {
-    this.run = opts.runner ?? (async (args) => execFileAsync(opts.binaryPath, args, { maxBuffer: 10 * 1024 * 1024 }));
+    this.run =
+      opts.runner ??
+      ((args) => {
+        // stdin is closed immediately so the CLI can never block waiting for input, and a
+        // hard per-command timeout kills a hung process (observed once during the PoC).
+        const pending = execFileAsync(opts.binaryPath, args, { maxBuffer: 10 * 1024 * 1024, timeout: opts.commandTimeoutMs ?? 120_000 });
+        pending.child.stdin?.end();
+        return pending;
+      });
     this.confirmationsRequired = opts.confirmationsRequired ?? 3;
   }
 

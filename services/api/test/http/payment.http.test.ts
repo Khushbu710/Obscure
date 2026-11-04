@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { BitrefillClient } from "@obscura/bitrefill-client";
 import { buildServer } from "../../src/http/server.js";
 import { SIMULATED_SETTLEMENT_LABEL } from "../../src/payment/paymentService.js";
+import { TransactionIntentBuilder } from "../../src/payment/transactionIntent.js";
 import type { SignOutcome, SignerGateway, TxView, WalletOpResult } from "../../src/signer/signerClient.js";
 import { createTestDb } from "../testDb.js";
 import { FakeLlmDriver, toolUseStep } from "../agent/fakeDriver.js";
@@ -20,9 +21,14 @@ const fixtureFetch = vi.fn(async () => new Response(JSON.stringify(JAPAN_FIXTURE
 class FakeSigner implements SignerGateway {
   signed: unknown[] = [];
   tx: TxView["status"] = "broadcast";
-  async sign(req: { authorizationToken: string; order: unknown }): Promise<SignOutcome> {
+  async sign(req: { authorizationToken: string; order: unknown; destinationAddress: string; amountZatoshi: number }): Promise<SignOutcome> {
     this.signed.push(req);
-    return { signed: true, walletRef: "w", amountZatoshi: 12_500_000, signedAt: new Date().toISOString(), tx: { txId: "tx-e2e", status: "broadcast" } };
+    return {
+      signed: true,
+      txProposal: { walletRef: "w", outputs: [{ address: req.destinationAddress, amountZatoshi: req.amountZatoshi }], memo: null },
+      signedAt: new Date().toISOString(),
+      txId: "tx-e2e",
+    };
   }
   async txStatus(): Promise<WalletOpResult<{ tx: TxView }>> {
     return { ok: true, tx: { txId: "tx-e2e", status: this.tx } };
@@ -41,6 +47,7 @@ describe("prompt -> authorization -> payment -> simulated delivery (HTTP)", () =
       bitrefillClient: new BitrefillClient({ apiKey: "k", fetchImpl: fixtureFetch }),
       invoiceCreator: { createInvoiceForOrder: async () => ({ id: "inv-e2e" }) },
       signerGateway: signer,
+      intentBuilder: new TransactionIntentBuilder({ destinationAddress: "utest1settlement", zatoshiPerMinor: 10_000 }),
     });
 
     const m = JSON.parse(
@@ -55,6 +62,8 @@ describe("prompt -> authorization -> payment -> simulated delivery (HTTP)", () =
 
     await app.payments!.idle();
     expect(signer.signed).toHaveLength(1);
+    // The signer is asked to pay the trusted, configured intent: price (1250 cents) x the fixed demo rate.
+    expect(signer.signed[0]).toMatchObject({ destinationAddress: "utest1settlement", amountZatoshi: 12_500_000 });
 
     // Broadcast, not yet confirmed: no delivery claim.
     let got = JSON.parse((await app.inject({ method: "GET", url: `/api/orders/${body.order.orderId}` })).payload);

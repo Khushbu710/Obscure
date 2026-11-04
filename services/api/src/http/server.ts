@@ -21,6 +21,7 @@ import { ReceiptService } from "../receipts/receiptService.js";
 import { ReceiptKeyring } from "../receipts/receiptCrypto.js";
 import { PaymentRepository } from "../repositories/paymentRepository.js";
 import { PaymentService, type InvoiceCreator } from "../payment/paymentService.js";
+import { TransactionIntentBuilder } from "../payment/transactionIntent.js";
 import { InvoiceService } from "../bitrefill/invoiceService.js";
 import { registerShoppingRoutes, type ShoppingAgentDependencies } from "./routes/shopping.js";
 
@@ -42,6 +43,8 @@ export interface ServerOptions {
   bitrefillClient?: BitrefillClient;
   /** Test-only injection point for the signer gateway - production wiring builds an HttpSignerClient from SIGNER_BASE_URL + SIGNER_AUTH_SECRET. */
   signerGateway?: SignerGateway;
+  /** Test-only injection point for the trusted transaction-intent builder - production reads DEMO_SETTLEMENT_ADDRESS + DEMO_ZATOSHI_PER_MINOR. */
+  intentBuilder?: TransactionIntentBuilder;
   /** Test-only injection point for invoice creation - production wiring uses InvoiceService over the Bitrefill client. */
   invoiceCreator?: InvoiceCreator;
   /** Test-only injection point for receipt keys. Production: RECEIPT_KEY_FILE (persistent); otherwise ephemeral keys with a warning. */
@@ -92,7 +95,26 @@ export async function buildServer(db: DatabaseSync, options: ServerOptions = {})
   // present - a secret with no agent, or an agent with no secret, are both
   // "not configured" from the route's point of view.
   const agentDeps = guardianHmacSecret && agentDepsIfConfigured ? agentDepsIfConfigured : null;
-  const authService = new OrderAuthorizationService(db, mandateRepo, orderRepo, nonceRepo, guardianHmacSecret ?? "unconfigured");
+  // The trusted source of the exact destination + amount (configured address x fixed DEMO rate).
+  // Never agent- or frontend-supplied. Without it no intent is bound, so the signer refuses to
+  // sign - authorized orders then stay `reserved`, never half-paid.
+  const intentBuilder =
+    options.intentBuilder ??
+    (process.env.DEMO_SETTLEMENT_ADDRESS
+      ? new TransactionIntentBuilder({
+          destinationAddress: process.env.DEMO_SETTLEMENT_ADDRESS,
+          zatoshiPerMinor: Number(process.env.DEMO_ZATOSHI_PER_MINOR ?? 10_000),
+        })
+      : null);
+  const authService = new OrderAuthorizationService(
+    db,
+    mandateRepo,
+    orderRepo,
+    nonceRepo,
+    guardianHmacSecret ?? "unconfigured",
+    undefined,
+    intentBuilder ? (proposed) => intentBuilder.forPriceMinor(proposed.priceMinor) : null,
+  );
 
   const signerGateway =
     options.signerGateway ??
@@ -115,8 +137,8 @@ export async function buildServer(db: DatabaseSync, options: ServerOptions = {})
   const receiptService = new ReceiptService(new ReceiptRepository(db), orderRepo, paymentRepo, keyring);
 
   const paymentService =
-    guardianHmacSecret && signerGateway && invoiceCreator
-      ? new PaymentService(orderRepo, paymentRepo, authService, invoiceCreator, signerGateway, {
+    guardianHmacSecret && signerGateway && invoiceCreator && intentBuilder
+      ? new PaymentService(orderRepo, paymentRepo, authService, invoiceCreator, signerGateway, intentBuilder, {
           confirmationTimeoutMs: options.confirmationTimeoutMs,
           onDelivered: (orderId) => void receiptService.createForOrder(orderId),
           onError: (e) => app.log.error(e, "payment execution failed"),

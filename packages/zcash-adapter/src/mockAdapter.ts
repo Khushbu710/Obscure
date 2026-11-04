@@ -8,7 +8,9 @@ export class MockZcashAdapter implements ZcashAdapter {
   private readonly txs = new Map<string, BlockchainTxResult>();
 
   async createWallet(label: string): Promise<WalletInfo> {
-    const walletRef = `mock:${label}:${randomBytes(4).toString("hex")}`;
+    // Matches CliZcashAdapter: the wallet ref IS the label, and re-creating one that exists fails.
+    const walletRef = label;
+    if (this.wallets.has(walletRef)) throw new Error("WALLET_EXISTS");
     const address = `utest1mock${randomBytes(8).toString("hex")}`;
     this.wallets.set(walletRef, { address, balance: 0 });
     return { walletRef, address };

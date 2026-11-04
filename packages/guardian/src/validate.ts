@@ -1,5 +1,5 @@
 import type { GuardianRequest, GuardianResponse, RejectionCode } from "@obscura/contracts";
-import { issueAuthorizationToken } from "./authorizationToken.js";
+import { issueAuthorizationToken, type TransactionIntent } from "./authorizationToken.js";
 
 /**
  * The exact, documented validation sequence (docs/architecture/testing-strategy.md §2).
@@ -34,8 +34,23 @@ function reject(code: RejectionCode, reason: string, nowIso: string): GuardianRe
  * `hmacSecret` is used only to bind the issued authorization token to this
  * exact order+nonce+mandate - it is an internal token secret, not a wallet
  * or signing key, and the guardian never persists or logs it.
+ *
+ * `transactionIntent` (2026-11-04, signer security review): the canonical
+ * blockchain destination/amount being authorized, if the caller has one to
+ * bind. The guardian does not construct or validate this value itself (it
+ * has no concept of settlement/conversion - see demo-scope.md) - it merely
+ * passes whatever the caller supplies through into the token's HMAC-signed
+ * payload so the signer can later verify the exact terms it's asked to sign
+ * were the terms actually authorized here, not something a compromised
+ * caller substituted afterward. Defaults to `null` ("no terms bound yet")
+ * so existing callers that don't have a real settlement system to source
+ * this from are unaffected.
  */
-export function validateOrder(request: GuardianRequest, hmacSecret: string): GuardianResponse {
+export function validateOrder(
+  request: GuardianRequest,
+  hmacSecret: string,
+  transactionIntent: TransactionIntent | null = null,
+): GuardianResponse {
   const { mandate, order, verifiedPriceMinor, nonceAlreadyConsumed, now } = request;
   const nowMs = Date.parse(now);
 
@@ -124,7 +139,7 @@ export function validateOrder(request: GuardianRequest, hmacSecret: string): Gua
 
   // Approved - issue a short-lived authorization token bound to this exact order+nonce+mandate.
   const authorizationToken = issueAuthorizationToken(
-    { orderId: order.orderId, nonce: order.nonce, mandateId: mandate.id },
+    { orderId: order.orderId, nonce: order.nonce, mandateId: mandate.id, transactionIntent },
     hmacSecret,
     nowMs,
   );

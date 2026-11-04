@@ -11,7 +11,7 @@ import {
   orchestratorFor,
   type Env,
 } from "./harness.js";
-import { buildSignerServer, signBody, SIGNATURE_HEADER } from "../../../apps/signer/src/index.js";
+import { HangingBlockchainAdapter, buildSignerServer, signBody, SIGNATURE_HEADER } from "../../../apps/signer/src/index.js";
 import { UnauthorizedAgentToolError } from "../../../services/api/src/agent/orchestrator.js";
 import { ReceiptKeyring, computeCommitment, signCommitment, verifyDisclosure } from "../../../services/api/src/receipts/receiptCrypto.js";
 import { FakeLlmDriver, toolUseStep } from "../../../services/api/test/agent/fakeDriver.js";
@@ -76,7 +76,7 @@ export function buildScenarios(): Scenario[] {
         });
         if (outcome.kind !== "authorized") return check(false, `expected a normal authorization of the real price, got ${outcome.kind}`);
         const priceOk = outcome.order.priceMinor === 1250;
-        const signed = await env.signer.signOrder({ authorizationToken: outcome.guardian.authorizationToken, order: outcome.order });
+        const signed = await env.signer.sign(env.signRequest(outcome.order, outcome.guardian.authorizationToken));
         const out = env.adapter.sent[0]?.outputs[0];
         const destOk = signed.signed && out?.address === SETTLEMENT_ADDRESS && out?.amountZatoshi === 1250 * ZATOSHI_PER_MINOR;
         const leaked = env.adapter.sent.some((t) => t.outputs.some((o) => o.address === ATTACKER_ADDRESS));
@@ -128,8 +128,8 @@ export function buildScenarios(): Scenario[] {
         const env = await createEnv();
         const id = await env.newMandate();
         const { order, token } = await authorizedOrder(env, id);
-        const first = await env.signer.signOrder({ authorizationToken: token, order });
-        const replay = await env.signer.signOrder({ authorizationToken: token, order });
+        const first = await env.signer.sign(env.signRequest(order, token));
+        const replay = await env.signer.sign(env.signRequest(order, token));
         const mandate = env.mandates.get(id);
         const guardianReplay = validateOrder(
           {
@@ -162,7 +162,7 @@ export function buildScenarios(): Scenario[] {
         const id = await env.newMandate();
         const { order, token } = await authorizedOrder(env, id);
         env.mandates.revoke(id);
-        const lateSign = await env.signer.signOrder({ authorizationToken: token, order });
+        const lateSign = await env.signer.sign(env.signRequest(order, token));
         const fresh = env.authorize(env.proposal(id));
         const ok =
           !lateSign.signed && lateSign.code === "MANDATE_NOT_ACTIVE" && !fresh.guardian.approved && fresh.guardian.code === "MANDATE_REVOKED" && env.adapter.sent.length === 0;
@@ -272,8 +272,8 @@ export function buildScenarios(): Scenario[] {
         env.clock.now = new Date(env.clock.now.getTime() + 25 * 3600_000);
         const fresh = env.authorize(env.proposal(id));
         // Token TTL is 90s, so re-issue one at the new time to isolate the MANDATE check at the signer.
-        const freshToken = issueAuthorizationToken({ orderId: order.orderId, nonce: order.nonce, mandateId: id }, TOKEN_SECRET, env.clock.now.getTime());
-        const lateSign = await env.signer.signOrder({ authorizationToken: freshToken, order });
+        const freshToken = issueAuthorizationToken({ orderId: order.orderId, nonce: order.nonce, mandateId: id, transactionIntent: env.intents.forPriceMinor(order.priceMinor) }, TOKEN_SECRET, env.clock.now.getTime());
+        const lateSign = await env.signer.sign(env.signRequest(order, freshToken));
         void token;
         return check(!fresh.guardian.approved && fresh.guardian.code === "MANDATE_EXPIRED" && !lateSign.signed && lateSign.code === "MANDATE_NOT_ACTIVE", `guardian=${fresh.guardian.approved ? "approved" : fresh.guardian.code}; signer=${lateSign.signed ? "signed" : lateSign.code}`);
       },
@@ -302,8 +302,8 @@ export function buildScenarios(): Scenario[] {
         const env = await createEnv();
         const id = await env.newMandate();
         const { order } = await authorizedOrder(env, id);
-        const forged = issueAuthorizationToken({ orderId: order.orderId, nonce: order.nonce, mandateId: id }, "attacker-secret", env.clock.now.getTime());
-        const r = await env.signer.signOrder({ authorizationToken: forged, order });
+        const forged = issueAuthorizationToken({ orderId: order.orderId, nonce: order.nonce, mandateId: id, transactionIntent: env.intents.forPriceMinor(order.priceMinor) }, "attacker-secret", env.clock.now.getTime());
+        const r = await env.signer.sign(env.signRequest(order, forged));
         return check(!r.signed && r.code === "INVALID_TOKEN" && env.adapter.sent.length === 0, `signer=${r.signed ? "signed" : r.code}; payments=${env.adapter.sent.length}`);
       },
     },
@@ -318,7 +318,7 @@ export function buildScenarios(): Scenario[] {
         const id = await env.newMandate();
         const { order, token } = await authorizedOrder(env, id);
         env.clock.now = new Date(env.clock.now.getTime() + 5 * 60_000);
-        const r = await env.signer.signOrder({ authorizationToken: token, order });
+        const r = await env.signer.sign(env.signRequest(order, token));
         return check(!r.signed && r.code === "TOKEN_EXPIRED" && env.adapter.sent.length === 0, `signer=${r.signed ? "signed" : r.code}`);
       },
     },
@@ -332,24 +332,24 @@ export function buildScenarios(): Scenario[] {
         const env = await createEnv();
         const id = await env.newMandate();
         const { order, token } = await authorizedOrder(env, id, 1000);
-        const r = await env.signer.signOrder({ authorizationToken: token, order: { ...order, priceMinor: 999_999 } as Order });
+        const r = await env.signer.sign(env.signRequest({ ...order, priceMinor: 999_999 } as Order, token));
         return check(!r.signed && r.code === "AMOUNT_MISMATCH" && env.adapter.sent.length === 0, `signer=${r.signed ? "signed" : r.code}`);
       },
     },
     {
       id: "S17",
-      title: "Request-supplied destination is ignored",
+      title: "Request-supplied destination or amount differs from the bound intent",
       core: false,
-      attack: "The signer request carries an extra attacker destination field, and the product name contains an address.",
-      expectedDefense: "The payment goes only to the signer's configured settlement address.",
+      attack: "A valid token, but the signer request names the attacker's address (and, separately, a larger amount) instead of the intent the guardian bound.",
+      expectedDefense: "Signer: DESTINATION_MISMATCH / AMOUNT_MISMATCH against the HMAC-bound TransactionIntent; nothing is paid.",
       async run() {
         const env = await createEnv();
         const id = await env.newMandate();
         const { order, token } = await authorizedOrder(env, id);
-        const polluted = { authorizationToken: token, order, destination: ATTACKER_ADDRESS, outputs: [{ address: ATTACKER_ADDRESS, amountZatoshi: 1 }] };
-        await env.signer.signOrder(polluted as never);
-        const addresses = env.adapter.sent.flatMap((t) => t.outputs.map((o) => o.address));
-        return check(addresses.length === 1 && addresses[0] === SETTLEMENT_ADDRESS, `paid addresses=${JSON.stringify(addresses)}`);
+        const dest = await env.signer.sign(env.signRequest(order, token, { destinationAddress: ATTACKER_ADDRESS }));
+        const amount = await env.signer.sign(env.signRequest(order, token, { amountZatoshi: 999_999_999 }));
+        const ok = !dest.signed && dest.code === "DESTINATION_MISMATCH" && !amount.signed && amount.code === "AMOUNT_MISMATCH" && env.adapter.sent.length === 0;
+        return check(ok, `wrong destination=${dest.signed ? "signed" : dest.code}; wrong amount=${amount.signed ? "signed" : amount.code}; payments=${env.adapter.sent.length}`);
       },
     },
     {
@@ -362,8 +362,8 @@ export function buildScenarios(): Scenario[] {
         const env = await createEnv();
         const id = await env.newMandate();
         const { order, token } = await authorizedOrder(env, id);
-        const app = await buildSignerServer(env.signer, SIGNER_AUTH_SECRET, false);
-        const body = JSON.stringify({ authorizationToken: token, order });
+        const app = await buildSignerServer(env.signer, env.wallets, SIGNER_AUTH_SECRET, false);
+        const body = JSON.stringify(env.signRequest(order, token));
         const h = { "content-type": "application/json" };
         const none = await app.inject({ method: "POST", url: "/sign", headers: h, payload: body });
         const wrong = await app.inject({ method: "POST", url: "/sign", headers: { ...h, [SIGNATURE_HEADER]: signBody(body, "wrong") }, payload: body });
@@ -381,7 +381,7 @@ export function buildScenarios(): Scenario[] {
         const env = await createEnv();
         const id = await env.newMandate();
         const { order, token } = await authorizedOrder(env, id);
-        const results = await Promise.all([env.signer.signOrder({ authorizationToken: token, order }), env.signer.signOrder({ authorizationToken: token, order })]);
+        const results = await Promise.all([env.signer.sign(env.signRequest(order, token)), env.signer.sign(env.signRequest(order, token))]);
         return check(results.filter((r) => r.signed).length === 1 && env.adapter.sent.length === 1, `signed=${results.filter((r) => r.signed).length}; payments=${env.adapter.sent.length}`);
       },
     },
@@ -394,11 +394,11 @@ export function buildScenarios(): Scenario[] {
       async run() {
         const env = await createEnv();
         const id = await env.newMandate();
-        const active = await env.signer.sweep(id);
+        const active = await env.wallets.sweep(id);
         const { order, token } = await authorizedOrder(env, id);
-        await env.signer.signOrder({ authorizationToken: token, order }); // now 'broadcast' = in flight
+        await env.signer.sign(env.signRequest(order, token)); // now 'broadcast' = in flight
         env.mandates.revoke(id);
-        const inFlight = await env.signer.sweep(id);
+        const inFlight = await env.wallets.sweep(id);
         const ok = !active.ok && active.code === "MANDATE_STILL_ACTIVE" && !inFlight.ok && inFlight.code === "ORDERS_IN_FLIGHT";
         return check(ok, `active=${active.ok ? "swept" : active.code}; in-flight=${inFlight.ok ? "swept" : inFlight.code}`);
       },
@@ -419,6 +419,55 @@ export function buildScenarios(): Scenario[] {
         const wrongKey = verifyDisclosure(real, ReceiptKeyring.ephemeral().publicKey);
         const genuine = verifyDisclosure(real, keys.publicKey);
         return check(genuine.valid && !cheaper.valid && !claimReal.valid && !wrongKey.valid, `genuine=${genuine.valid}; cheaper=${cheaper.reason}; claimedReal=${claimReal.reason}; wrongKey=${wrongKey.reason}`);
+      },
+    },
+    {
+      id: "S22",
+      title: "Token with no bound transaction intent",
+      core: false,
+      attack: "An approval whose token carries no destination/amount (the pre-intent token shape), used to ask the signer to pay a destination of the caller's choosing.",
+      expectedDefense: "Signer: TRANSACTION_INTENT_NOT_BOUND - there is nothing to verify the terms against, so it refuses.",
+      async run() {
+        const env = await createEnv();
+        const id = await env.newMandate();
+        const { order } = await authorizedOrder(env, id);
+        const unbound = issueAuthorizationToken({ orderId: order.orderId, nonce: order.nonce, mandateId: id }, TOKEN_SECRET, env.clock.now.getTime());
+        const r = await env.signer.sign(env.signRequest(order, unbound, { destinationAddress: ATTACKER_ADDRESS }));
+        return check(!r.signed && r.code === "TRANSACTION_INTENT_NOT_BOUND" && env.adapter.sent.length === 0, `signer=${r.signed ? "signed" : r.code}; payments=${env.adapter.sent.length}`);
+      },
+    },
+    {
+      id: "S23",
+      title: "Destination outside the signer's allowlist, even if bound into the token",
+      core: false,
+      attack: "A (hypothetically compromised) approval path binds the attacker's address into the token and the request matches it.",
+      expectedDefense: "Signer refuses any destination not in its own operator-configured allowlist; nothing is paid.",
+      async run() {
+        const env = await createEnv();
+        const id = await env.newMandate();
+        const { order } = await authorizedOrder(env, id);
+        const intent = { destinationAddress: ATTACKER_ADDRESS, amountZatoshi: order.priceMinor * ZATOSHI_PER_MINOR };
+        const token = issueAuthorizationToken({ orderId: order.orderId, nonce: order.nonce, mandateId: id, transactionIntent: intent }, TOKEN_SECRET, env.clock.now.getTime());
+        const r = await env.signer.sign({ authorizationToken: token, order, ...intent });
+        return check(!r.signed && r.code === "DESTINATION_MISMATCH" && env.adapter.sent.length === 0, `signer=${r.signed ? "signed" : r.code}; payments=${env.adapter.sent.length}`);
+      },
+    },
+    {
+      id: "S24",
+      title: "Wallet hangs after a signing request (broadcast outcome unknown)",
+      core: false,
+      attack: "The wallet/adapter never answers, so it is unknown whether the transaction broadcast. A naive system would retry or release the budget (risking a double spend).",
+      expectedDefense: "BROADCAST_UNCERTAIN: the order is frozen as payment_uncertain, the budget stays reserved, and a second attempt is refused (no retry).",
+      async run() {
+        const env = await createEnv();
+        const id = await env.newMandate();
+        const { order, token } = await authorizedOrder(env, id);
+        const hanging = env.signerWith(new HangingBlockchainAdapter(), 50);
+        const first = await hanging.sign(env.signRequest(order, token));
+        const status = env.orders.getById(order.orderId)?.status;
+        const retry = await hanging.sign(env.signRequest(order, token));
+        const ok = !first.signed && first.code === "BROADCAST_UNCERTAIN" && status === "payment_uncertain" && env.spent(id) === 1000 && !retry.signed && retry.code === "NONCE_ALREADY_CONSUMED";
+        return check(ok, `first=${first.signed ? "signed" : first.code}; order=${status}; spent=${env.spent(id)}; retry=${retry.signed ? "signed" : retry.code}`);
       },
     },
   ];

@@ -3,6 +3,7 @@ import type { OrderRepository } from "../repositories/orderRepository.js";
 import type { PaymentRecord, PaymentRepository } from "../repositories/paymentRepository.js";
 import type { OrderAuthorizationService } from "../mandate/orderAuthorizationService.js";
 import type { SignerGateway } from "../signer/signerClient.js";
+import type { TransactionIntentBuilder } from "./transactionIntent.js";
 
 /** Anything that can create an invoice for an already-authorized order id (the real InvoiceService, or a fake). */
 export interface InvoiceCreator {
@@ -38,7 +39,7 @@ export interface PaymentView {
   simulatedDelivery: { simulated: true; label: string } | null;
 }
 
-const SIGNED_STATES: OrderStatus[] = ["signed", "broadcast", "mined"];
+const SIGNED_STATES: OrderStatus[] = ["authorized", "signed", "broadcast", "mined"];
 
 /**
  * Orchestrates everything AFTER guardian authorization (payment-flow.md):
@@ -61,6 +62,8 @@ export class PaymentService {
     private readonly authService: OrderAuthorizationService,
     private readonly invoices: InvoiceCreator,
     private readonly signer: SignerGateway,
+    /** The trusted source of the exact destination/amount - the SAME builder the guardian bound into the token. */
+    private readonly intents: TransactionIntentBuilder,
     private readonly opts: {
       confirmationTimeoutMs?: number;
       now?: () => Date;
@@ -103,25 +106,63 @@ export class PaymentService {
       return { kind: "invoice_failed" };
     }
 
+    // The exact terms come from the trusted builder, recomputed from the PERSISTED price - the
+    // same deterministic function the guardian used when it bound the intent into the token.
+    // If it cannot produce an intent, nothing is sent (the signer would refuse anyway).
+    const intent = this.intents.forPriceMinor(stored.priceMinor);
+    if (!intent) {
+      this.authService.release(stored);
+      this.payments.setStatus(order.orderId, "failed");
+      return { kind: "signer_rejected", code: "NO_TRANSACTION_INTENT", reason: "No transaction intent could be built for this order." };
+    }
+
     let outcome;
     try {
-      outcome = await this.signer.sign({ authorizationToken, order: stored });
+      outcome = await this.signer.sign({
+        authorizationToken,
+        order: stored,
+        destinationAddress: intent.destinationAddress,
+        amountZatoshi: intent.amountZatoshi,
+      });
     } catch {
       return this.resolveUnreachableSigner(order.orderId);
     }
 
-    if (!outcome.signed) {
-      const current = this.orders.getById(order.orderId);
-      if (current) this.authService.release(current);
-      this.payments.setStatus(order.orderId, "failed");
-      return { kind: "signer_rejected", code: outcome.code, reason: outcome.reason };
+    if (!outcome.signed) return this.handleRejection(order.orderId, outcome.code, outcome.reason);
+
+    // The wallet broadcast it, but without a txid we cannot track confirmation or prove what
+    // happened: hold it for manual reconciliation rather than guess.
+    if (!outcome.txId) {
+      this.orders.setStatus(order.orderId, "payment_uncertain");
+      this.payments.setStatus(order.orderId, "payment_uncertain");
+      return { kind: "payment_uncertain" };
     }
 
     // Record the broadcast ourselves rather than relying on the signer's write to a
     // shared database (idempotent today; required if the signer gets its own datastore).
     this.orders.setStatus(order.orderId, "broadcast");
-    this.payments.setPayment(order.orderId, "broadcast", outcome.tx.txId, outcome.amountZatoshi);
-    return { kind: "submitted", txId: outcome.tx.txId };
+    this.payments.setPayment(order.orderId, "broadcast", outcome.txId, intent.amountZatoshi);
+    return { kind: "submitted", txId: outcome.txId };
+  }
+
+  /**
+   * The signer answered with a refusal. Which refusals are SAFE to release on matters:
+   *  - BROADCAST_UNCERTAIN: the wallet may already have broadcast. Hold the budget, never
+   *    release, never retry (payment-flow.md section 1/4).
+   *  - INTERNAL_ERROR: we cannot tell how far it got, so the persisted status decides.
+   *  - everything else (invalid token, mismatch, inactive mandate, adapter failure ...):
+   *    the signer has asserted nothing was paid, so the reservation is released.
+   */
+  private handleRejection(orderId: string, code: string, reason: string): StartOutcome {
+    const current = this.orders.getById(orderId);
+    if (code === "BROADCAST_UNCERTAIN" || (code === "INTERNAL_ERROR" && current && current.status !== "reserved" && current.status !== "failed")) {
+      this.orders.setStatus(orderId, "payment_uncertain");
+      this.payments.setStatus(orderId, "payment_uncertain");
+      return { kind: "payment_uncertain" };
+    }
+    if (current) this.authService.release(current); // a no-op if the signer already marked it failed
+    this.payments.setStatus(orderId, "failed");
+    return { kind: "signer_rejected", code, reason };
   }
 
   /**

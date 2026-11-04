@@ -8,24 +8,36 @@ import { MandateService } from "../src/mandate/mandateService.js";
 import { OrderAuthorizationService } from "../src/mandate/orderAuthorizationService.js";
 import { PaymentService, SIMULATED_SETTLEMENT_LABEL, type InvoiceCreator } from "../src/payment/paymentService.js";
 import type { SignOutcome, SignerGateway, TxView, WalletOpResult } from "../src/signer/signerClient.js";
+import { TransactionIntentBuilder } from "../src/payment/transactionIntent.js";
 import { createTestDb } from "./testDb.js";
 
 class FakeSigner implements SignerGateway {
   signCalls = 0;
-  signBehavior: "ok" | "reject" | "throw-unsigned" | "throw-after-sign" = "ok";
+  lastRequest: { destinationAddress: string; amountZatoshi: number; authorizationToken: string } | null = null;
+  signBehavior: "ok" | "reject" | "uncertain" | "internal" | "no-txid" | "throw-unsigned" | "throw-after-sign" = "ok";
   txBehavior: TxView["status"] | "throw" = "broadcast";
   /** Lets "throw-after-sign" simulate the signer having flipped the shared order row before the connection dropped. */
   onSignedThenThrow: () => void = () => {};
+  /** Lets "internal" simulate how far the signer got before its internal error. */
+  onInternal: () => void = () => {};
 
-  async sign(): Promise<SignOutcome> {
+  async sign(request: { authorizationToken: string; order: unknown; destinationAddress: string; amountZatoshi: number }): Promise<SignOutcome> {
     this.signCalls++;
+    this.lastRequest = { destinationAddress: request.destinationAddress, amountZatoshi: request.amountZatoshi, authorizationToken: request.authorizationToken };
     if (this.signBehavior === "reject") return { signed: false, code: "MANDATE_NOT_ACTIVE", reason: "revoked" };
+    if (this.signBehavior === "uncertain") return { signed: false, code: "BROADCAST_UNCERTAIN", reason: "adapter timed out" };
+    if (this.signBehavior === "internal") {
+      this.onInternal();
+      return { signed: false, code: "INTERNAL_ERROR", reason: "internal" };
+    }
     if (this.signBehavior === "throw-unsigned") throw new Error("ECONNREFUSED");
     if (this.signBehavior === "throw-after-sign") {
       this.onSignedThenThrow();
       throw new Error("socket hang up");
     }
-    return { signed: true, walletRef: "w", amountZatoshi: 10_000_000, signedAt: new Date().toISOString(), tx: { txId: "tx1", status: "broadcast" } };
+    const txProposal = { walletRef: "w", outputs: [{ address: request.destinationAddress, amountZatoshi: request.amountZatoshi }], memo: null };
+    if (this.signBehavior === "no-txid") return { signed: true, txProposal, signedAt: new Date().toISOString() };
+    return { signed: true, txProposal, signedAt: new Date().toISOString(), txId: "tx1" };
   }
   async txStatus(): Promise<WalletOpResult<{ tx: TxView }>> {
     if (this.txBehavior === "throw") throw new Error("signer down");
@@ -61,6 +73,7 @@ describe("PaymentService", () => {
   let signer: FakeSigner;
   let invoices: FakeInvoices;
   let svc: PaymentService;
+  let intents: TransactionIntentBuilder;
   let mandateId: string;
   let order: Order;
   let token: string;
@@ -74,11 +87,12 @@ describe("PaymentService", () => {
     orders = new OrderRepository(db);
     payments = new PaymentRepository(db);
     mandates = new MandateService(mandateRepo);
-    auth = new OrderAuthorizationService(db, mandateRepo, orders, new NonceRepository(db), "secret");
+    intents = new TransactionIntentBuilder({ destinationAddress: "utest1settlement", zatoshiPerMinor: 10_000 });
+    auth = new OrderAuthorizationService(db, mandateRepo, orders, new NonceRepository(db), "secret", undefined, (p) => intents.forPriceMinor(p.priceMinor));
     signer = new FakeSigner();
     invoices = new FakeInvoices();
     clock = new Date();
-    svc = new PaymentService(orders, payments, auth, invoices, signer, { now: () => clock, confirmationTimeoutMs: 60_000 });
+    svc = new PaymentService(orders, payments, auth, invoices, signer, intents, { now: () => clock, confirmationTimeoutMs: 60_000 });
     mandateId = mandates.create("u", { allowedCategories: ["esim"], totalCapMinor: 3000, currency: "USD", durationHours: 24 }).id;
     const r = auth.authorize(proposed(mandateId), 1000);
     if (!r.guardian.approved) throw new Error("setup: expected approval");
@@ -175,5 +189,49 @@ describe("PaymentService", () => {
     clock = new Date(Date.now() + 5 * 60_000);
     expect((await svc.refresh(order.orderId))?.status).toBe("payment_uncertain");
     expect(spent()).toBe(1000);
+  });
+  it("sends the signer the trusted intent (configured address x fixed rate), identical to the one bound into the token", async () => {
+    await svc.execute(order, token);
+    expect(signer.lastRequest).toMatchObject({ destinationAddress: "utest1settlement", amountZatoshi: 1000 * 10_000 });
+    const payload = JSON.parse(Buffer.from(token.split(".")[0]!, "base64url").toString("utf8"));
+    expect(payload.transactionIntent).toEqual({ destinationAddress: "utest1settlement", amountZatoshi: 10_000_000 });
+    expect(payments.getByOrderId(order.orderId)?.amountZatoshi).toBe(10_000_000);
+  });
+
+  it("BROADCAST_UNCERTAIN from the signer is held: budget kept, not released, never retried", async () => {
+    signer.signBehavior = "uncertain";
+    expect(await svc.execute(order, token)).toEqual({ kind: "payment_uncertain" });
+    expect(orders.getById(order.orderId)?.status).toBe("payment_uncertain");
+    expect(payments.getByOrderId(order.orderId)?.status).toBe("payment_uncertain");
+    expect(spent()).toBe(1000);
+    expect(await svc.execute(order, token)).toMatchObject({ kind: "not_reserved" });
+    expect(signer.signCalls).toBe(1);
+  });
+
+  it("INTERNAL_ERROR before the signer touched the order releases; after it advanced, holds as uncertain", async () => {
+    signer.signBehavior = "internal"; // order still 'reserved': nothing happened
+    expect(await svc.execute(order, token)).toMatchObject({ kind: "signer_rejected", code: "INTERNAL_ERROR" });
+    expect(spent()).toBe(0);
+
+    // A second order where the signer had already moved it to 'authorized' before failing.
+    const r2 = auth.authorize(proposed(mandateId), 1000);
+    if (!r2.guardian.approved) throw new Error("setup");
+    signer.onInternal = () => orders.setStatus(r2.order.orderId, "authorized");
+    expect(await svc.execute(r2.order, r2.guardian.authorizationToken)).toEqual({ kind: "payment_uncertain" });
+    expect(spent()).toBe(1000);
+  });
+
+  it("a signed result with no txid cannot be tracked, so it is held as payment_uncertain", async () => {
+    signer.signBehavior = "no-txid";
+    expect(await svc.execute(order, token)).toEqual({ kind: "payment_uncertain" });
+    expect(spent()).toBe(1000);
+  });
+
+  it("an order whose price cannot form a valid intent is never sent to the signer", async () => {
+    const zeroRate = { forPriceMinor: () => null } as unknown as TransactionIntentBuilder;
+    const guarded = new PaymentService(orders, payments, auth, invoices, signer, zeroRate, { now: () => clock });
+    expect(await guarded.execute(order, token)).toMatchObject({ kind: "signer_rejected", code: "NO_TRANSACTION_INTENT" });
+    expect(signer.signCalls).toBe(0);
+    expect(spent()).toBe(0);
   });
 });

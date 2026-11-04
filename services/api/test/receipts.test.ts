@@ -11,6 +11,7 @@ import {
   verifyDisclosure,
 } from "../src/receipts/receiptCrypto.js";
 import type { SignOutcome, SignerGateway, TxView, WalletOpResult } from "../src/signer/signerClient.js";
+import { TransactionIntentBuilder } from "../src/payment/transactionIntent.js";
 import { createTestDb } from "./testDb.js";
 import { FakeLlmDriver, toolUseStep } from "./agent/fakeDriver.js";
 
@@ -59,8 +60,13 @@ describe("receipt crypto", () => {
 });
 
 class FakeSigner implements SignerGateway {
-  async sign(): Promise<SignOutcome> {
-    return { signed: true, walletRef: "w", amountZatoshi: 1, signedAt: new Date().toISOString(), tx: { txId: "tx", status: "broadcast" } };
+  async sign(req: { destinationAddress: string; amountZatoshi: number }): Promise<SignOutcome> {
+    return {
+      signed: true,
+      txProposal: { walletRef: "w", outputs: [{ address: req.destinationAddress, amountZatoshi: req.amountZatoshi }], memo: null },
+      signedAt: new Date().toISOString(),
+      txId: "tx",
+    };
   }
   async txStatus(): Promise<WalletOpResult<{ tx: TxView }>> {
     return { ok: true, tx: { txId: "tx", status: "confirmed" } };
@@ -81,6 +87,7 @@ async function deliveredOrder() {
     bitrefillClient: new BitrefillClient({ apiKey: "k", fetchImpl: (async () => new Response(JSON.stringify(FIXTURE), { status: 200 })) as unknown as typeof fetch }),
     invoiceCreator: { createInvoiceForOrder: async () => ({ id: "inv" }) },
     signerGateway: new FakeSigner(),
+    intentBuilder: new TransactionIntentBuilder({ destinationAddress: "utest1settlement", zatoshiPerMinor: 10_000 }),
   });
   const m = JSON.parse((await app.inject({ method: "POST", url: "/api/mandates", payload: { allowedCategories: ["esim"], totalCapMinor: 3000, currency: "USD", durationHours: 24 } })).payload);
   const r = JSON.parse((await app.inject({ method: "POST", url: "/api/shopping/requests", payload: { mandateId: m.id, prompt: "x" } })).payload);

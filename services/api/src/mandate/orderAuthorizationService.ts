@@ -1,6 +1,6 @@
 import { randomBytes, randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
-import { validateOrder } from "@obscura/guardian";
+import { validateOrder, type TransactionIntent } from "@obscura/guardian";
 import { RESERVED_STATUSES, type GuardianResponse, type Order, type ProposedOrder } from "@obscura/contracts";
 import { MandateRepository, toGuardianSnapshot } from "../repositories/mandateRepository.js";
 import { OrderRepository } from "../repositories/orderRepository.js";
@@ -51,10 +51,31 @@ export class OrderAuthorizationService {
     private readonly nonces: NonceRepository,
     private readonly guardianHmacSecret: string,
     private readonly now: () => Date = () => new Date(),
+    /**
+     * Additive (2026-11-04, payment orchestration): the TRUSTED source of the
+     * canonical transaction terms, used when the caller of authorize() does
+     * not pass an explicit intent. Supplied by the payment-orchestration
+     * layer (configured destination + fixed demo rate) - never by the agent.
+     * `null` (default) keeps the earlier behaviour: no intent is bound, so the
+     * signer will refuse to sign (TRANSACTION_INTENT_NOT_BOUND) - fail closed.
+     */
+    private readonly intentProvider: ((proposed: ProposedOrder) => TransactionIntent | null) | null = null,
   ) {}
 
-  authorize(proposed: ProposedOrder, verifiedPriceMinor: number): AuthorizeOrderResult {
+  /**
+   * `transactionIntent` (2026-11-04, signer security review): the canonical
+   * destination/amount to cryptographically bind into the issued
+   * authorization token, if the caller has one. This service is the right
+   * place to construct it once a real settlement/payment orchestrator
+   * exists (it already owns the moment of approval), but no such component
+   * exists yet in this MVP - see demo-scope.md - so there is nothing honest
+   * to default it to beyond `null`; callers that do have a resolved intent
+   * must supply it explicitly rather than this service inventing one.
+   */
+  authorize(proposed: ProposedOrder, verifiedPriceMinor: number, transactionIntent: TransactionIntent | null = null): AuthorizeOrderResult {
     const nowIso = this.now().toISOString();
+    // An explicit intent wins; otherwise the trusted provider; otherwise none (signer will refuse).
+    const intent = transactionIntent ?? this.intentProvider?.(proposed) ?? null;
 
     const order: Order = {
       orderId: randomUUID(),
@@ -82,6 +103,7 @@ export class OrderAuthorizationService {
           now: nowIso,
         },
         this.guardianHmacSecret,
+        intent,
       );
 
       if (!guardianResult.approved) {

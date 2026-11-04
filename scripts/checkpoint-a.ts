@@ -18,7 +18,13 @@ import { OrderRepository } from "../services/api/src/repositories/orderRepositor
 import { NonceRepository } from "../services/api/src/repositories/nonceRepository.js";
 import { MandateService } from "../services/api/src/mandate/mandateService.js";
 import { OrderAuthorizationService } from "../services/api/src/mandate/orderAuthorizationService.js";
-import { SignerService, SqliteSignerStore } from "../apps/signer/src/index.js";
+import {
+  SignerMandateRepository,
+  SignerOrderRepository,
+  SignerService,
+  ZcashBlockchainAdapter,
+} from "../apps/signer/src/index.js";
+import { TransactionIntentBuilder } from "../services/api/src/payment/transactionIntent.js";
 
 const BINARY = process.env.ZCASH_DEVTOOL_PATH ?? "tools/zcash-devtool/bin/zcash-devtool.exe";
 const WALLETS = process.env.WALLETS_DIR ?? "tools/poc";
@@ -43,13 +49,21 @@ const db = openDatabase(":memory:");
 const mandateRepo = new MandateRepository(db);
 const orders = new OrderRepository(db);
 const mandates = new MandateService(mandateRepo);
-const auth = new OrderAuthorizationService(db, mandateRepo, orders, new NonceRepository(db), TOKEN_SECRET);
-const signer = new SignerService(new SqliteSignerStore(db), adapter, {
-  tokenSecret: TOKEN_SECRET,
-  settlementAddress,
-  sweepAddress: settlementAddress, // not used in this script
-  zatoshiPerMinor: 10_000, // demo rate: $5.00 (500 cents) = 0.05 TAZ
-});
+// The trusted source of the exact destination + amount: the configured settlement address x the FIXED
+// DEMONSTRATION RATE (10,000 zatoshi per USD cent). Not a live exchange rate - and not a real conversion.
+const intents = new TransactionIntentBuilder({ destinationAddress: settlementAddress, zatoshiPerMinor: 10_000 });
+const auth = new OrderAuthorizationService(db, mandateRepo, orders, new NonceRepository(db), TOKEN_SECRET, undefined, (p) => intents.forPriceMinor(p.priceMinor));
+const signerMandates = new SignerMandateRepository(db);
+const signer = new SignerService(
+  db,
+  signerMandates,
+  new SignerOrderRepository(db),
+  TOKEN_SECRET,
+  new ZcashBlockchainAdapter(adapter, signerMandates),
+  () => Date.now(),
+  120_000, // a real send builds a proof; past this the outcome would be treated as UNKNOWN (BROADCAST_UNCERTAIN)
+  new Set([settlementAddress]),
+);
 
 await adapter.sync(ENVELOPE);
 const before = await adapter.getBalance(ENVELOPE);
@@ -73,20 +87,23 @@ const { order, guardian } = auth.authorize(
 if (!guardian.approved) throw new Error(`guardian rejected: ${guardian.code}`);
 log(`guardian APPROVED order ${order.orderId}; budget reserved`);
 
-// 3. Independent signer re-validation + real payment.
-const result = await signer.signOrder({ authorizationToken: guardian.authorizationToken, order });
+// 3. Independent signer re-validation + real payment. The destination/amount are the guardian-bound intent.
+const intent = intents.forPriceMinor(order.priceMinor)!;
+const result = await signer.sign({ authorizationToken: guardian.authorizationToken, order, destinationAddress: intent.destinationAddress, amountZatoshi: intent.amountZatoshi });
 if (!result.signed) throw new Error(`signer refused: ${result.code} - ${result.reason}`);
-log(`signer SIGNED + BROADCAST real transaction ${result.tx.txId} (${result.amountZatoshi} zatoshi -> demo settlement wallet)`);
+if (!result.txId) throw new Error("signer reported success without a txId");
+const txId = result.txId;
+log(`signer SIGNED + BROADCAST real transaction ${txId} (${intent.amountZatoshi} zatoshi -> demo settlement wallet)`);
 
 // 4. Track confirmation on the real chain.
 for (let i = 0; i < 40; i++) {
   await adapter.sync(ENVELOPE);
-  const st = await adapter.getTxStatus(ENVELOPE, result.tx.txId);
+  const st = await adapter.getTxStatus(ENVELOPE, txId);
   log(`status: ${st.status} (confirmations=${st.confirmations})`);
   if (st.status === "confirmed") {
     const after = await adapter.getBalance(ENVELOPE);
     log(`CHECKPOINT A REACHED. envelope total after: ${after.totalZatoshi} zatoshi`);
-    log(`txid: ${result.tx.txId}`);
+    log(`txid: ${txId}`);
     process.exit(0);
   }
   await sleep(15_000);

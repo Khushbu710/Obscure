@@ -11,7 +11,15 @@ import { MandateService } from "../../../services/api/src/mandate/mandateService
 import { OrderAuthorizationService } from "../../../services/api/src/mandate/orderAuthorizationService.js";
 import { ProductDiscoveryService } from "../../../services/api/src/bitrefill/productDiscoveryService.js";
 import { AgentOrchestrator } from "../../../services/api/src/agent/orchestrator.js";
-import { SignerService, SqliteSignerStore } from "../../../apps/signer/src/index.js";
+import {
+  SignerMandateRepository,
+  SignerOrderRepository,
+  SignerService,
+  WalletOpsService,
+  ZcashBlockchainAdapter,
+  type BlockchainAdapter,
+} from "../../../apps/signer/src/index.js";
+import { TransactionIntentBuilder } from "../../../services/api/src/payment/transactionIntent.js";
 
 export const TOKEN_SECRET = "scoreboard-token-secret";
 export const SIGNER_AUTH_SECRET = "scoreboard-signer-auth-secret";
@@ -38,6 +46,13 @@ export interface Env {
   mandates: MandateService;
   auth: OrderAuthorizationService;
   signer: SignerService;
+  wallets: WalletOpsService;
+  /** The trusted source of the exact destination/amount, same as production. */
+  intents: TransactionIntentBuilder;
+  /** A signer request carrying the trusted intent for this order; `over` lets a scenario tamper with it. */
+  signRequest(order: Order, token: string, over?: Record<string, unknown>): Parameters<SignerService["sign"]>[0];
+  /** Builds a second signer over the same database but a different adapter (e.g. one that hangs). */
+  signerWith(adapter: BlockchainAdapter, adapterTimeoutMs?: number): SignerService;
   /** Creates a funded mandate (with its own envelope wallet) and returns its id. */
   newMandate(over?: { categories?: string[]; merchants?: string[] | null; totalCapMinor?: number; perOrderCapMinor?: number | null; durationHours?: number; funded?: boolean }): Promise<string>;
   proposal(mandateId: string, over?: { priceMinor?: number; category?: string; merchantId?: string; name?: string }): ProposedOrder;
@@ -54,14 +69,15 @@ export async function createEnv(): Promise<Env> {
   const orders = new OrderRepository(db);
   const nonces = new NonceRepository(db);
   const mandates = new MandateService(mandateRepo, now);
-  const auth = new OrderAuthorizationService(db, mandateRepo, orders, nonces, TOKEN_SECRET, now);
+  const intents = new TransactionIntentBuilder({ destinationAddress: SETTLEMENT_ADDRESS, zatoshiPerMinor: ZATOSHI_PER_MINOR });
+  const auth = new OrderAuthorizationService(db, mandateRepo, orders, nonces, TOKEN_SECRET, now, (p) => intents.forPriceMinor(p.priceMinor));
   const adapter = new SpyAdapter();
-  const signer = new SignerService(
-    new SqliteSignerStore(db),
-    adapter,
-    { tokenSecret: TOKEN_SECRET, settlementAddress: SETTLEMENT_ADDRESS, sweepAddress: SWEEP_ADDRESS, zatoshiPerMinor: ZATOSHI_PER_MINOR },
-    now,
-  );
+  const signerMandates = new SignerMandateRepository(db);
+  const signerOrders = new SignerOrderRepository(db);
+  const signerWith = (a: BlockchainAdapter, timeoutMs = 1000) =>
+    new SignerService(db, signerMandates, signerOrders, TOKEN_SECRET, a, () => clock.now.getTime(), timeoutMs, new Set([SETTLEMENT_ADDRESS]));
+  const signer = signerWith(new ZcashBlockchainAdapter(adapter, signerMandates));
+  const wallets = new WalletOpsService(signerMandates, signerOrders, adapter, { sweepAddress: SWEEP_ADDRESS }, () => clock.now.getTime());
 
   return {
     db,
@@ -72,6 +88,13 @@ export async function createEnv(): Promise<Env> {
     mandates,
     auth,
     signer,
+    wallets,
+    intents,
+    signerWith,
+    signRequest(order, token, over = {}) {
+      const intent = intents.forPriceMinor(order.priceMinor)!;
+      return { authorizationToken: token, order, destinationAddress: intent.destinationAddress, amountZatoshi: intent.amountZatoshi, ...over };
+    },
     async newMandate(over = {}) {
       const m = mandates.create("demo-user", {
         allowedCategories: over.categories ?? ["esim"],
