@@ -103,7 +103,7 @@ export function ShoppingPage() {
             <div style={{ marginTop: 28 }}>
               <ErrorState error={error} onRetry={run} />
               {error instanceof ApiError && error.status === 503 && (
-                <p className="page-intro">The shopping agent requires Anthropic and Bitrefill API credentials to be configured on the backend - see services/api/.env.example.</p>
+                <p className="page-intro">The shopping agent requires Gemini and Bitrefill API credentials to be configured on the backend - see services/api/.env.example.</p>
               )}
             </div>
           )}

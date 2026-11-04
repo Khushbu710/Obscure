@@ -10,8 +10,8 @@
     "dev": "tsx watch src/index.ts"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.32.1",
     "@fastify/cors": "^11.4.0",
+    "@google/genai": "^2.32.0",
     "@obscura/bitrefill-client": "*",
     "@obscura/contracts": "*",
     "@obscura/guardian": "*",

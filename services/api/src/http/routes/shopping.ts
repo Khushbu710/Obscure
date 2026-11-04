@@ -59,7 +59,7 @@ export function registerShoppingRoutes(
   app: FastifyInstance,
   mandateService: MandateService,
   authService: OrderAuthorizationService,
-  /** null when ANTHROPIC_API_KEY/BITREFILL_API_KEY/GUARDIAN_HMAC_SECRET are not configured - the route still exists, it just reports its own unconfigured state rather than the server failing to boot. */
+  /** null when GEMINI_API_KEY/BITREFILL_API_KEY/GUARDIAN_HMAC_SECRET are not configured - the route still exists, it just reports its own unconfigured state rather than the server failing to boot. */
   agentDeps: ShoppingAgentDependencies | null,
   routeOptions: ShoppingRouteOptions = {},
   /** null when payments are not configured: authorized orders then stay `reserved`. */

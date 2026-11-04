@@ -1,9 +1,9 @@
 /**
- * Minimal, Anthropic-tool-use-shaped types for the agent orchestration
- * loop. Kept close to the real Messages API shape (content blocks of type
- * text / tool_use / tool_result) so the production driver
- * (anthropicDriver.ts) is a thin adapter, not a translation layer - see
- * docs/architecture/component-architecture.md module 5.
+ * Minimal, provider-agnostic content-block-shaped types for the agent
+ * orchestration loop (text / tool_use / tool_result). The production driver
+ * (geminiDriver.ts) translates this shape to/from the Gemini API's own
+ * Content/Part wire format - see docs/architecture/component-architecture.md
+ * module 5.
  */
 
 export interface AgentToolSpec {
@@ -30,7 +30,7 @@ export type AgentStepResult =
 /**
  * Pluggable so tests never need live LLM credentials - see
  * test/agent/fakeDriver.ts for the scripted test double and
- * anthropicDriver.ts for the real (currently live-unverified) production
+ * geminiDriver.ts for the real (currently live-unverified) production
  * implementation.
  */
 export interface AgentLlmDriver {

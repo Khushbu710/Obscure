@@ -8,7 +8,7 @@ import { NonceRepository } from "../repositories/nonceRepository.js";
 import { MandateService } from "../mandate/mandateService.js";
 import { OrderAuthorizationService } from "../mandate/orderAuthorizationService.js";
 import { ProductDiscoveryService } from "../bitrefill/productDiscoveryService.js";
-import { AnthropicLlmDriver } from "../agent/anthropicDriver.js";
+import { GeminiLlmDriver } from "../agent/geminiDriver.js";
 import type { AgentLlmDriver } from "../agent/types.js";
 import { registerMandateRoutes } from "./routes/mandates.js";
 import { HttpSignerClient, type SignerGateway } from "../signer/signerClient.js";
@@ -61,7 +61,7 @@ export interface ServerOptions {
 /**
  * Resolves what the shopping-agent route needs. Returns null (not a
  * startup failure) when credentials aren't configured - see
- * docs/architecture/verification-matrix.md: no live Anthropic or Bitrefill
+ * docs/architecture/verification-matrix.md: no live Gemini or Bitrefill
  * key exists in this environment, so the route must degrade honestly
  * (503 AGENT_NOT_CONFIGURED) rather than either crashing server boot or
  * pretending to work.
@@ -71,7 +71,8 @@ function resolveBitrefillClient(options: ServerOptions): BitrefillClient | null 
 }
 
 function resolveAgentDependencies(options: ServerOptions): ShoppingAgentDependencies | null {
-  const driver = options.agentDriver ?? (process.env.ANTHROPIC_API_KEY ? new AnthropicLlmDriver(process.env.ANTHROPIC_API_KEY) : null);
+  const driver =
+    options.agentDriver ?? (process.env.GEMINI_API_KEY ? new GeminiLlmDriver(process.env.GEMINI_API_KEY, process.env.GEMINI_MODEL) : null);
   const bitrefillClient = resolveBitrefillClient(options);
   if (!driver || !bitrefillClient) return null;
   return { driver, discovery: new ProductDiscoveryService(bitrefillClient) };

@@ -3,7 +3,7 @@ import { apiError } from "@obscura/contracts";
 import { MandateNotFoundError, InvalidMandateTransitionError } from "../mandate/mandateService.js";
 import { MandateNotFoundForOrderError } from "../mandate/orderAuthorizationService.js";
 import { AgentStepTimeoutError } from "../agent/orchestrator.js";
-import { AgentDriverError } from "../agent/anthropicDriver.js";
+import { AgentDriverError } from "../agent/geminiDriver.js";
 import { SignerUnavailableError } from "../signer/signerClient.js";
 
 /**
@@ -32,7 +32,7 @@ export function sendError(reply: FastifyReply, err: unknown): void {
   }
   if (err instanceof AgentDriverError) {
     // AgentDriverError's own message is already sanitized (see
-    // anthropicDriver.ts - it never embeds the API key), but we still send
+    // geminiDriver.ts - it never embeds the API key), but we still send
     // a fixed, generic message over the wire and keep the detail
     // server-side only, consistent with "keep error messages safe."
     // eslint-disable-next-line no-console

@@ -20,7 +20,7 @@
 |---|---|---|
 | Public blockchain observers | Nothing of substance — shielded pool | This is the actual privacy win |
 | Bitrefill | The product purchased, price, delivery destination/contact, and the real invoice's payment address/amount (even though it is never actually paid in the MVP) | Bitrefill is the merchant; it must know what it's delivering and to whom |
-| LLM provider (Anthropic) | The user's shopping prompt text and the mandate's category/budget summary | Needed for the agent to function; **never the key material, never other mandates, never full spending history** |
+| LLM provider (Google Gemini) | The user's shopping prompt text and the mandate's category/budget summary | Needed for the agent to function; **never the key material, never other mandates, never full spending history** |
 | A fully compromised user device | Everything the user's wallet can see/sign | Out of scope — no software system protects against full device compromise; explicitly not claimed |
 | Anyone with write access to the backend's SQLite file | Could forge mandate state the signer reads (see narrowed boundary above) | Accepted hackathon-scope limitation, not hidden |
 

@@ -262,9 +262,9 @@ describe("POST /api/shopping/requests", () => {
   describe("Security: agent-not-configured degrades honestly", () => {
     it("returns 503 AGENT_NOT_CONFIGURED when no driver/Bitrefill client is available, rather than crashing", async () => {
       const db = createTestDb();
-      const savedAnthropic = process.env.ANTHROPIC_API_KEY;
+      const savedGemini = process.env.GEMINI_API_KEY;
       const savedBitrefill = process.env.BITREFILL_API_KEY;
-      delete process.env.ANTHROPIC_API_KEY;
+      delete process.env.GEMINI_API_KEY;
       delete process.env.BITREFILL_API_KEY;
       try {
         const unconfiguredApp = await buildServer(db, { guardianHmacSecret: SECRET });
@@ -277,7 +277,7 @@ describe("POST /api/shopping/requests", () => {
         expect(res.statusCode).toBe(503);
         expect(JSON.parse(res.payload).error.code).toBe("AGENT_NOT_CONFIGURED");
       } finally {
-        if (savedAnthropic !== undefined) process.env.ANTHROPIC_API_KEY = savedAnthropic;
+        if (savedGemini !== undefined) process.env.GEMINI_API_KEY = savedGemini;
         if (savedBitrefill !== undefined) process.env.BITREFILL_API_KEY = savedBitrefill;
       }
     });
