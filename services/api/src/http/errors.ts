@@ -4,6 +4,7 @@ import { MandateNotFoundError, InvalidMandateTransitionError } from "../mandate/
 import { MandateNotFoundForOrderError } from "../mandate/orderAuthorizationService.js";
 import { AgentStepTimeoutError } from "../agent/orchestrator.js";
 import { AgentDriverError } from "../agent/anthropicDriver.js";
+import { SignerUnavailableError } from "../signer/signerClient.js";
 
 /**
  * Uniform error shape across the whole backend - docs/architecture/data-models.md §11.
@@ -37,6 +38,12 @@ export function sendError(reply: FastifyReply, err: unknown): void {
     // eslint-disable-next-line no-console
     console.error(err);
     reply.code(502).send(apiError("AGENT_DRIVER_ERROR", "The shopping agent encountered an error communicating with its provider."));
+    return;
+  }
+  if (err instanceof SignerUnavailableError) {
+    // eslint-disable-next-line no-console
+    console.error(err);
+    reply.code(502).send(apiError("SIGNER_UNAVAILABLE", "The signer service is unavailable."));
     return;
   }
   // eslint-disable-next-line no-console

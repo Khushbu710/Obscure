@@ -57,6 +57,14 @@ export class SignerService {
     private readonly adapter: BlockchainAdapter,
     private readonly now: () => number = () => Date.now(),
     private readonly adapterTimeoutMs: number = DEFAULT_ADAPTER_TIMEOUT_MS,
+    /**
+     * Additive (2026-11-04): when set, the signer refuses to pay any
+     * destination not in this fixed, operator-configured set - in addition to
+     * the token's bound TransactionIntent. The agent and frontend can never
+     * widen it. `null` (default) = no allowlist check (the intent binding
+     * still applies).
+     */
+    private readonly allowedDestinations: ReadonlySet<string> | null = null,
   ) {
     // Fail closed at construction, not at first request: an unconfigured
     // signer must refuse to exist rather than silently accept/reject every
@@ -135,6 +143,7 @@ export class SignerService {
         memo: null,
       },
       signedAt: new Date(this.now()).toISOString(),
+      txId: adapterResult.txId,
     };
   }
 
@@ -225,6 +234,10 @@ export class SignerService {
     }
     if (token.transactionIntent.amountZatoshi !== request.amountZatoshi) {
       return fail("AMOUNT_MISMATCH", "The requested zatoshi amount does not match the authorized transaction intent.");
+    }
+
+    if (this.allowedDestinations !== null && !this.allowedDestinations.has(request.destinationAddress)) {
+      return fail("DESTINATION_MISMATCH", "The destination address is not in the signer's configured allowlist.");
     }
 
     // Reject expired, revoked, paused, or otherwise-non-active mandates.

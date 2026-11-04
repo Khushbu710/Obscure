@@ -42,6 +42,18 @@ export class SignerMandateRepository {
     return row ? rowToMandate(row) : null;
   }
 
+  /**
+   * Additive (2026-11-04, wallet operations): the fields the envelope
+   * create/status/sweep operations need. Read-only; never used to authorize a
+   * payment (SignerService.sign does that from its own checks).
+   */
+  getEnvelopeInfo(id: string): { status: MandateStatus; expiresAt: string; envelopeWalletRef: string | null } | null {
+    const row = this.db.prepare("SELECT status, expires_at, envelope_wallet_ref FROM mandates WHERE id = ?").get(id) as
+      | { status: MandateStatus; expires_at: string; envelope_wallet_ref: string | null }
+      | undefined;
+    return row ? { status: row.status, expiresAt: row.expires_at, envelopeWalletRef: row.envelope_wallet_ref } : null;
+  }
+
   /** Releases a reservation back to available budget on signing/adapter failure. */
   releaseSpend(id: string, amountMinor: number): void {
     this.db.prepare("UPDATE mandates SET spent_minor = spent_minor - ? WHERE id = ?").run(amountMinor, id);
@@ -94,6 +106,16 @@ export class SignerOrderRepository {
       .prepare("UPDATE orders SET status = ? WHERE order_id = ? AND status = ?")
       .run(toStatus, orderId, fromStatus);
     return result.changes !== 0;
+  }
+
+  /** Orders that still hold a reservation or an unconfirmed payment - a sweep must wait for these. */
+  countInFlight(mandateId: string): number {
+    const row = this.db
+      .prepare(
+        "SELECT COUNT(*) AS n FROM orders WHERE mandate_id = ? AND status IN ('reserved','authorized','signed','broadcast','mined','payment_uncertain')",
+      )
+      .get(mandateId) as { n: number };
+    return row.n;
   }
 
   setStatus(orderId: string, status: OrderStatus): void {

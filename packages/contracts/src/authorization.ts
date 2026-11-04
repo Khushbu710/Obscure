@@ -39,6 +39,13 @@ export const SignerSuccessSchema = z.object({
     memo: z.string().nullable(),
   }),
   signedAt: ISODateStringSchema,
+  /**
+   * Additive (2026-11-04, signer/adapter integration): the id of the
+   * transaction the adapter actually broadcast, so the backend can track its
+   * confirmation. Optional so existing consumers and mock adapters are
+   * unaffected; the real adapter always supplies it.
+   */
+  txId: z.string().optional(),
 });
 
 export const SignerRejectionCodeSchema = z.enum([

@@ -4,14 +4,16 @@
   "workspaces": [
     "packages/*",
     "services/*",
-    "apps/*"
+    "apps/*",
+    "tests/*"
   ],
   "scripts": {
     "build:contracts": "npm run build -w @obscura/contracts",
     "build:guardian": "npm run build -w @obscura/guardian",
     "build:bitrefill-client": "npm run build -w @obscura/bitrefill-client",
-    "pretest": "npm run build:contracts && npm run build:guardian && npm run build:bitrefill-client",
+    "build:zcash-adapter": "npm run build -w @obscura/zcash-adapter",
     "build:signer": "npm run build -w @obscura/signer",
+    "pretest": "npm run build:contracts && npm run build:guardian && npm run build:bitrefill-client && npm run build:zcash-adapter",
     "test": "npm run test --workspaces --if-present",
     "build": "npm run build --workspaces --if-present"
   },

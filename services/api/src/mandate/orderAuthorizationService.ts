@@ -51,6 +51,15 @@ export class OrderAuthorizationService {
     private readonly nonces: NonceRepository,
     private readonly guardianHmacSecret: string,
     private readonly now: () => Date = () => new Date(),
+    /**
+     * Additive (2026-11-04, payment orchestration): the TRUSTED source of the
+     * canonical transaction terms, used when the caller of authorize() does
+     * not pass an explicit intent. Supplied by the payment-orchestration
+     * layer (configured destination + fixed demo rate) - never by the agent.
+     * `null` (default) keeps the earlier behaviour: no intent is bound, so the
+     * signer will refuse to sign (TRANSACTION_INTENT_NOT_BOUND) - fail closed.
+     */
+    private readonly intentProvider: ((proposed: ProposedOrder) => TransactionIntent | null) | null = null,
   ) {}
 
   /**
@@ -65,6 +74,8 @@ export class OrderAuthorizationService {
    */
   authorize(proposed: ProposedOrder, verifiedPriceMinor: number, transactionIntent: TransactionIntent | null = null): AuthorizeOrderResult {
     const nowIso = this.now().toISOString();
+    // An explicit intent wins; otherwise the trusted provider; otherwise none (signer will refuse).
+    const intent = transactionIntent ?? this.intentProvider?.(proposed) ?? null;
 
     const order: Order = {
       orderId: randomUUID(),
@@ -92,7 +103,7 @@ export class OrderAuthorizationService {
           now: nowIso,
         },
         this.guardianHmacSecret,
-        transactionIntent,
+        intent,
       );
 
       if (!guardianResult.approved) {

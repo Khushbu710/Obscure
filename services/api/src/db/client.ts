@@ -21,6 +21,9 @@ const { DatabaseSync } = process.getBuiltinModule("node:sqlite") as typeof impor
 export function openDatabase(path: string): DatabaseSyncType {
   const db = new DatabaseSync(path);
   db.exec("PRAGMA foreign_keys = ON;");
+  // The signer is a separate process writing to this same file (documented MVP limitation):
+  // wait for its brief write lock instead of failing immediately with SQLITE_BUSY.
+  db.exec("PRAGMA busy_timeout = 5000;");
   const schema = readFileSync(join(__dirname, "schema.sql"), "utf8");
   db.exec(schema);
   return db;

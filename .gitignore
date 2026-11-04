@@ -40,3 +40,9 @@ Thumbs.db
 .vscode/
 .idea/
 *.swp
+
+# Receipt service keys (signing + encryption) and signer wallets
+receipt-keys.json
+*.identity.txt
+wallets/
+tests/attack-scoreboard/results/
