@@ -4,4 +4,5 @@ export {
   verifyAuthorizationToken,
   type AuthorizationTokenPayload,
   type TokenVerification,
+  type TransactionIntent,
 } from "./authorizationToken.js";

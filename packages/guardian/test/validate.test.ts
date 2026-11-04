@@ -218,6 +218,27 @@ describe("validateOrder - no I/O, zero network/LLM dependency", () => {
   });
 });
 
+describe("validateOrder - transaction intent binding (signer security review, 2026-11-04)", () => {
+  it("issues a token with transactionIntent: null when the caller supplies none", () => {
+    const result = validateOrder(baseRequest(), SECRET);
+    expect(result.approved).toBe(true);
+    if (!result.approved) throw new Error("expected approval");
+    const verified = verifyAuthorizationToken(result.authorizationToken, SECRET, Date.parse(NOW));
+    if (!verified.valid) throw new Error("expected valid token");
+    expect(verified.payload.transactionIntent).toBeNull();
+  });
+
+  it("cryptographically binds a supplied transactionIntent into the token", () => {
+    const intent = { destinationAddress: "u1testdestination", amountZatoshi: 50_000 };
+    const result = validateOrder(baseRequest(), SECRET, intent);
+    expect(result.approved).toBe(true);
+    if (!result.approved) throw new Error("expected approval");
+    const verified = verifyAuthorizationToken(result.authorizationToken, SECRET, Date.parse(NOW));
+    if (!verified.valid) throw new Error("expected valid token");
+    expect(verified.payload.transactionIntent).toEqual(intent);
+  });
+});
+
 describe("verifyAuthorizationToken - regression: rejects validly-signed but malformed payloads", () => {
   function signRawPayload(payload: unknown): string {
     const payloadB64 = Buffer.from(JSON.stringify(payload), "utf8").toString("base64url");

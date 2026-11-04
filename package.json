@@ -11,10 +11,17 @@
     "build:guardian": "npm run build -w @obscura/guardian",
     "build:bitrefill-client": "npm run build -w @obscura/bitrefill-client",
     "pretest": "npm run build:contracts && npm run build:guardian && npm run build:bitrefill-client",
+    "build:signer": "npm run build -w @obscura/signer",
     "test": "npm run test --workspaces --if-present",
     "build": "npm run build --workspaces --if-present"
   },
   "engines": {
     "node": ">=22"
+  },
+  "overrides": {
+    "jsdom": "25.0.1"
+  },
+  "devDependencies": {
+    "jsdom": "25.0.1"
   }
 }

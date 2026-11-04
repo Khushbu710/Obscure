@@ -1,6 +1,6 @@
 import { randomBytes, randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
-import { validateOrder } from "@obscura/guardian";
+import { validateOrder, type TransactionIntent } from "@obscura/guardian";
 import { RESERVED_STATUSES, type GuardianResponse, type Order, type ProposedOrder } from "@obscura/contracts";
 import { MandateRepository, toGuardianSnapshot } from "../repositories/mandateRepository.js";
 import { OrderRepository } from "../repositories/orderRepository.js";
@@ -53,7 +53,17 @@ export class OrderAuthorizationService {
     private readonly now: () => Date = () => new Date(),
   ) {}
 
-  authorize(proposed: ProposedOrder, verifiedPriceMinor: number): AuthorizeOrderResult {
+  /**
+   * `transactionIntent` (2026-11-04, signer security review): the canonical
+   * destination/amount to cryptographically bind into the issued
+   * authorization token, if the caller has one. This service is the right
+   * place to construct it once a real settlement/payment orchestrator
+   * exists (it already owns the moment of approval), but no such component
+   * exists yet in this MVP - see demo-scope.md - so there is nothing honest
+   * to default it to beyond `null`; callers that do have a resolved intent
+   * must supply it explicitly rather than this service inventing one.
+   */
+  authorize(proposed: ProposedOrder, verifiedPriceMinor: number, transactionIntent: TransactionIntent | null = null): AuthorizeOrderResult {
     const nowIso = this.now().toISOString();
 
     const order: Order = {
@@ -82,6 +92,7 @@ export class OrderAuthorizationService {
           now: nowIso,
         },
         this.guardianHmacSecret,
+        transactionIntent,
       );
 
       if (!guardianResult.approved) {
